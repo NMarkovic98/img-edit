@@ -1,0 +1,865 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+// Progress component will be created inline
+import {
+  Wand2,
+  Image as ImageIcon,
+  Clock,
+  User,
+  ExternalLink,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  DollarSign,
+  MessageCircle,
+  AlertCircle,
+  Link,
+  ShieldCheck,
+  ShieldAlert,
+} from "lucide-react";
+import Image from "next/image";
+import { useImageViewer } from "./image-viewer";
+
+interface RedditPost {
+  id: string;
+  title: string;
+  description: string;
+  imageUrl: string;
+  allImages: string[];
+  isGallery: boolean;
+  imageCount: number;
+  postUrl: string;
+  created_utc: number;
+  created_date: string;
+  author: string;
+  score: number;
+  num_comments: number;
+  subreddit: string;
+  flair?: string | null;
+  isPaid?: boolean;
+}
+
+interface AnalysisResult {
+  ok: boolean;
+  postId: string;
+  originalPost: RedditPost;
+  analysis: string;
+  timestamp: string;
+}
+
+interface EditRequest {
+  id: string;
+  post: RedditPost;
+  status: "pending" | "processing" | "completed" | "failed";
+  analysis?: string;
+  editForm?: any;
+  editedImageUrl?: string;
+  timestamp?: number;
+}
+
+const AVAILABLE_SUBREDDITS = [
+  { id: "PhotoshopRequest", label: "r/PhotoshopRequest" },
+  { id: "PhotoshopRequests", label: "r/PhotoshopRequests" },
+  { id: "picrequests", label: "r/picrequests" },
+  { id: "estoration", label: "r/estoration" },
+  { id: "editmyphoto", label: "r/editmyphoto" },
+];
+
+// Format time ago in minutes
+function timeAgo(utc: number): string {
+  const now = Date.now() / 1000;
+  const diff = Math.floor(now - utc);
+  if (diff < 60) return `${diff}s ago`;
+  const mins = Math.floor(diff / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}h ${mins % 60}m ago`;
+}
+
+export function QueueView() {
+  const [posts, setPosts] = useState<RedditPost[]>([]);
+  const [editRequests, setEditRequests] = useState<EditRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [analyzingPostId, setAnalyzingPostId] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
+    null,
+  );
+  const [selectedSubreddits, setSelectedSubreddits] = useState<string[]>(
+    AVAILABLE_SUBREDDITS.map((s) => s.id), // All selected by default
+  );
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [newPostIds, setNewPostIds] = useState<Set<string>>(new Set());
+  const [newPostCount, setNewPostCount] = useState(0);
+  const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
+  const [error, setError] = useState<string | null>(null);
+  const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const { showImage } = useImageViewer();
+  const [, setTick] = useState(0);
+
+  // Re-render every 30s to update "time ago" labels
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Listen for global notification events from NotificationProvider
+  useEffect(() => {
+    const onNewPosts = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const ids: string[] = detail?.postIds || [];
+      if (ids.length > 0) {
+        setNewPostIds((prev) => {
+          const updated = new Set(prev);
+          ids.forEach((id) => updated.add(id));
+          return updated;
+        });
+        setNewPostCount((prev) => prev + ids.length);
+        // Also refresh the post list
+        fetchPosts(true);
+      }
+    };
+    const onCommentedPosts = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.postIds) {
+        setCommentedPostIds(new Set(detail.postIds));
+      }
+    };
+    window.addEventListener("fixtral:newPosts", onNewPosts);
+    window.addEventListener("fixtral:commentedPosts", onCommentedPosts);
+    return () => {
+      window.removeEventListener("fixtral:newPosts", onNewPosts);
+      window.removeEventListener("fixtral:commentedPosts", onCommentedPosts);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleSubreddit = (id: string) => {
+    setSelectedSubreddits((prev) => {
+      if (prev.includes(id)) {
+        if (prev.length === 1) return prev; // Keep at least one
+        return prev.filter((s) => s !== id);
+      }
+      return [...prev, id];
+    });
+  };
+
+  // Fetch Reddit posts (notifications are handled globally by NotificationProvider)
+  const fetchPosts = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const subredditsParam = selectedSubreddits.join(",");
+        const response = await fetch(
+          `/api/reddit/posts?subreddits=${subredditsParam}`,
+        );
+        const data = await response.json();
+
+        if (!data.ok && data.isRateLimited) {
+          setError("Reddit is rate-limiting requests. Returning cached data.");
+        } else if (!data.ok) {
+          setError(data.error || "Failed to fetch posts");
+        } else {
+          setError(null);
+        }
+
+        if (data.ok) {
+          const rawPosts: RedditPost[] = data.posts || [];
+
+          // Deduplicate posts by ID
+          const seen = new Set<string>();
+          const fetchedPosts = rawPosts.filter((p) => {
+            if (seen.has(p.id)) return false;
+            seen.add(p.id);
+            return true;
+          });
+
+          setPosts(fetchedPosts);
+        }
+      } catch (error) {
+        console.error("Error fetching posts:", error);
+      }
+      if (!silent) setLoading(false);
+    },
+    [selectedSubreddits],
+  );
+
+  // Analyze post with Google Gemini 2.5 Flash
+  const analyzePost = async (postId: string) => {
+    setAnalyzingPostId(postId);
+    try {
+      // Use the post already loaded in state instead of re-fetching
+      const post = posts.find((p) => p.id === postId);
+
+      if (!post) {
+        throw new Error("Post not found");
+      }
+
+      // Now analyze with Google Gemini 2.5 Flash
+      const analysisResponse = await fetch("/api/reddit/posts", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: post.title,
+          description: post.description,
+          imageUrl: post.imageUrl,
+          allImages: post.allImages || [post.imageUrl],
+          isGallery: post.isGallery || false,
+          imageCount: post.imageCount || 1,
+        }),
+      });
+
+      const result = await analysisResponse.json();
+      if (result.ok) {
+        setAnalysisResult({
+          ok: true,
+          postId: postId,
+          originalPost: post,
+          analysis: result.changeSummary,
+          timestamp: result.timestamp,
+        });
+      } else {
+        console.error("Analysis failed:", result.error);
+      }
+    } catch (error) {
+      console.error("Error analyzing post:", error);
+    }
+    setAnalyzingPostId(null);
+  };
+
+  // Send analyzed post to editor (for the new workflow)
+  const sendToEditor = (post: RedditPost, analysis: string) => {
+    console.log("Sending to editor:", { post, analysis });
+
+    const requestId = `req_${Date.now()}_${post.id}`;
+
+    const newRequest: EditRequest = {
+      id: requestId,
+      post,
+      status: "completed",
+      analysis: analysis,
+      timestamp: Date.now(),
+    };
+
+    setEditRequests((prev) => [...prev, newRequest]);
+
+    // Store in localStorage for the editor to pick up
+    const editorData = {
+      id: requestId,
+      post: post,
+      allImages: post.allImages || [post.imageUrl],
+      analysis: analysis,
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log("Storing editor data:", editorData);
+    localStorage.setItem("pendingEditorItem", JSON.stringify(editorData));
+
+    // Clear analysis result
+    setAnalysisResult(null);
+
+    // Force a storage event to trigger tab switch (for same-window navigation)
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "pendingEditorItem",
+        newValue: JSON.stringify(editorData),
+        oldValue: null,
+        storageArea: localStorage,
+      }),
+    );
+
+    // Show success message
+    alert(
+      "Post sent to Editor! The app will switch to the Editor tab automatically.",
+    );
+  };
+
+  // Fetch on mount and when subreddits change
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
+
+  // Auto-refresh every 30 seconds
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchPosts(true); // silent refresh
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchPosts]);
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-6 sm:space-y-8 mobile-container">
+      {/* Header Section */}
+      <div className="text-center py-8 sm:py-16 px-4 bg-gradient-to-b from-transparent via-muted/10 to-transparent mobile-container">
+        <div className="flex flex-col items-center justify-center space-y-4 mb-6 sm:mb-8">
+          <div className="flex items-center justify-center space-x-3 sm:space-x-4">
+            <div className="relative flex-shrink-0">
+              <Wand2 className="h-8 w-8 sm:h-12 sm:w-12 text-primary animate-pulse" />
+              <div className="absolute -top-1 -right-1 w-3 h-3 sm:w-4 sm:h-4 bg-yellow-500 rounded-full animate-ping opacity-75"></div>
+            </div>
+            <h1 className="text-3xl sm:text-5xl font-bold bg-gradient-to-r from-primary via-primary to-primary/70 bg-clip-text text-transparent mobile-responsive-large">
+              Fixtral
+            </h1>
+          </div>
+        </div>
+        <p className="text-lg sm:text-xl text-muted-foreground max-w-3xl mx-auto mb-8 sm:mb-12 leading-relaxed mobile-responsive-text px-4 sm:px-0">
+          AI-Powered Reddit Photoshop Assistant - Automated image editing with
+          Google Gemini AI
+        </p>
+
+        {/* Workflow Steps */}
+        <div className="flex justify-center px-4">
+          <div className="flex flex-row items-center justify-center space-x-2 sm:space-x-4 sm:space-x-6 bg-gradient-to-r from-muted/30 via-muted/50 to-muted/30 p-3 sm:p-6 rounded-2xl border shadow-lg backdrop-blur-sm w-full max-w-md sm:max-w-none mx-auto">
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
+                1
+              </div>
+              <span className="text-xs sm:text-sm font-semibold">Analyze</span>
+            </div>
+            <div className="flex items-center justify-center">
+              <span className="text-xs sm:text-sm font-bold text-muted-foreground px-1 sm:px-2">
+                →
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
+                2
+              </div>
+              <span className="text-xs sm:text-sm font-semibold">Edit</span>
+            </div>
+            <div className="flex items-center justify-center">
+              <span className="text-xs sm:text-sm font-bold text-muted-foreground px-1 sm:px-2">
+                →
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
+                3
+              </div>
+              <span className="text-xs sm:text-sm font-semibold">Save</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Analysis Result Modal */}
+      {analysisResult && (
+        <Card className="border-primary/20 bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 shadow-xl mobile-card">
+          <CardHeader className="pb-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-3 sm:space-y-0 sm:space-x-3">
+              <div className="p-2 bg-green-500 rounded-full touch-target">
+                <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-lg sm:text-xl font-bold mobile-responsive-heading">
+                  Analysis Complete!
+                </CardTitle>
+                <CardDescription className="text-muted-foreground text-sm sm:text-base">
+                  Google Gemini 2.5 Flash has analyzed the post and generated an
+                  edit prompt
+                </CardDescription>
+              </div>
+              <Badge
+                variant="secondary"
+                className="bg-primary/10 text-primary border-primary/20 font-semibold text-xs sm:text-sm"
+              >
+                Step 1: AI Analysis Complete
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4 sm:space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+              {/* Original Post */}
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="font-semibold text-foreground flex items-center space-x-2 text-sm sm:text-base">
+                  <ImageIcon className="h-4 w-4 text-primary" />
+                  <span>Original Reddit Post</span>
+                </h3>
+                <div className="space-y-3">
+                  <div className="bg-card p-4 sm:p-6 rounded-xl border shadow-sm">
+                    <h4 className="font-semibold mb-3 text-card-foreground text-sm sm:text-base line-clamp-2">
+                      {analysisResult.originalPost.title}
+                    </h4>
+                    <p className="text-sm text-muted-foreground mb-4 leading-relaxed line-clamp-3">
+                      {analysisResult.originalPost.description}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 sm:gap-6 text-xs text-muted-foreground">
+                      <span className="flex items-center">
+                        <User className="h-3 w-3 mr-1 sm:mr-2" />
+                        {analysisResult.originalPost.author}
+                      </span>
+                      <span className="flex items-center">
+                        <Clock className="h-3 w-3 mr-1 sm:mr-2" />
+                        {new Date(
+                          analysisResult.originalPost.created_utc * 1000,
+                        ).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    className="relative aspect-video overflow-hidden rounded-xl border bg-card shadow-md cursor-pointer hover:shadow-lg transition-all duration-300 group touch-target"
+                    onClick={() =>
+                      showImage(
+                        analysisResult.originalPost.imageUrl,
+                        `Reddit Image${analysisResult.originalPost.isGallery ? ` (1 of ${analysisResult.originalPost.imageCount})` : ""}`,
+                        analysisResult.originalPost.imageUrl,
+                        analysisResult.originalPost.postUrl,
+                      )
+                    }
+                  >
+                    <Image
+                      src={analysisResult.originalPost.imageUrl}
+                      alt="Original Reddit image"
+                      fill
+                      className="object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 rounded-xl"></div>
+                  </div>
+
+                  {/* Image URL & Quality Indicator */}
+                  <div className="bg-card p-3 sm:p-4 rounded-xl border shadow-sm space-y-2">
+                    <h4 className="font-semibold text-xs sm:text-sm text-muted-foreground flex items-center space-x-1.5">
+                      <Link className="h-3.5 w-3.5" />
+                      <span>Image URL → Edit API</span>
+                    </h4>
+                    <div className="bg-muted/50 rounded-lg p-2 overflow-x-auto">
+                      <code className="text-[10px] sm:text-xs break-all text-foreground/80 font-mono">
+                        {analysisResult.originalPost.imageUrl}
+                      </code>
+                    </div>
+                    {(() => {
+                      const url = analysisResult.originalPost.imageUrl;
+                      const isOriginal = url.includes("i.redd.it");
+                      const isPreview = url.includes("preview.redd.it");
+                      const isImgur = url.includes("i.imgur.com");
+                      return (
+                        <div
+                          className={`flex items-center space-x-2 text-xs sm:text-sm font-medium px-2 py-1.5 rounded-lg ${
+                            isOriginal || isImgur
+                              ? "text-green-700 dark:text-green-400 bg-green-500/10 border border-green-500/20"
+                              : isPreview
+                                ? "text-red-700 dark:text-red-400 bg-red-500/10 border border-red-500/20"
+                                : "text-yellow-700 dark:text-yellow-400 bg-yellow-500/10 border border-yellow-500/20"
+                          }`}
+                        >
+                          {isOriginal || isImgur ? (
+                            <>
+                              <ShieldCheck className="h-4 w-4 flex-shrink-0" />
+                              <span>
+                                Original resolution (i.redd.it) — no quality
+                                loss
+                              </span>
+                            </>
+                          ) : isPreview ? (
+                            <>
+                              <ShieldAlert className="h-4 w-4 flex-shrink-0" />
+                              <span>
+                                Preview image (preview.redd.it) — recompressed,
+                                quality may be reduced
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                              <span>External URL — quality unknown</span>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Analysis & Actions */}
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="font-semibold text-foreground flex items-center space-x-2 text-sm sm:text-base">
+                  <Wand2 className="h-4 w-4 text-primary" />
+                  <span>AI-Generated Edit Prompt</span>
+                </h3>
+                <div className="bg-card p-4 sm:p-6 rounded-xl border shadow-sm">
+                  <div className="flex items-start space-x-3">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Wand2 className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm leading-relaxed text-card-foreground">
+                        {analysisResult.analysis}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button
+                    onClick={() =>
+                      sendToEditor(
+                        analysisResult.originalPost,
+                        analysisResult.analysis,
+                      )
+                    }
+                    className="flex-1 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-200 mobile-button"
+                  >
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    Send to Editor
+                  </Button>
+
+                  <Button
+                    onClick={() => setAnalysisResult(null)}
+                    variant="outline"
+                    className="flex-1 border-muted-foreground/20 hover:bg-muted/50 font-semibold transition-all duration-200 mobile-button"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+
+                <div className="bg-gradient-to-r from-primary/5 to-primary/10 border border-primary/20 p-3 sm:p-4 rounded-xl">
+                  <div className="flex items-start space-x-3">
+                    <div className="p-1 bg-primary/20 rounded-lg">
+                      <ExternalLink className="h-3 w-3 text-primary" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-primary mb-1">
+                        Next Step:
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Switch to the Editor tab to modify the prompt and
+                        generate the edited image.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Posts Grid */}
+      <div className="space-y-6">
+        <div className="flex flex-col gap-4 sm:gap-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="space-y-2">
+              <h2 className="text-2xl font-bold mobile-responsive-heading">
+                Reddit Posts Queue
+              </h2>
+              <p className="text-muted-foreground mobile-responsive-text">
+                Latest Photoshop requests from{" "}
+                {selectedSubreddits.map((s) => `r/${s}`).join(", ")}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button
+                onClick={() => setAutoRefresh(!autoRefresh)}
+                variant={autoRefresh ? "default" : "outline"}
+                size="sm"
+                className={autoRefresh ? "bg-green-600 hover:bg-green-700" : ""}
+              >
+                <Clock className="mr-1 h-3 w-3" />
+                {autoRefresh ? "Auto: ON" : "Auto: OFF"}
+              </Button>
+              <Button
+                onClick={() => fetchPosts()}
+                disabled={loading}
+                className="mobile-button"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4" />
+                    Refresh
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* Subreddit Selector */}
+          <div className="flex flex-wrap gap-2 items-center">
+            {AVAILABLE_SUBREDDITS.map((sub) => {
+              const count = posts.filter((p) => p.subreddit === sub.id).length;
+              return (
+                <Button
+                  key={sub.id}
+                  variant={
+                    selectedSubreddits.includes(sub.id) ? "default" : "outline"
+                  }
+                  size="sm"
+                  onClick={() => toggleSubreddit(sub.id)}
+                  className={`relative ${
+                    selectedSubreddits.includes(sub.id)
+                      ? "bg-orange-500 hover:bg-orange-600 text-white"
+                      : "hover:bg-muted/50"
+                  }`}
+                >
+                  {sub.label}
+                  {count > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-white/20 text-white">
+                      {count}
+                    </span>
+                  )}
+                </Button>
+              );
+            })}
+            <div className="w-px h-5 bg-border mx-1" />
+            {(["all", "paid", "free"] as const).map((filter) => (
+              <Button
+                key={filter}
+                variant={filterPaid === filter ? "default" : "outline"}
+                size="sm"
+                onClick={() => setFilterPaid(filter)}
+                className={
+                  filterPaid === filter
+                    ? filter === "paid"
+                      ? "bg-green-600 hover:bg-green-700 text-white"
+                      : filter === "free"
+                        ? "bg-gray-500 hover:bg-gray-600 text-white"
+                        : ""
+                    : "hover:bg-muted/50"
+                }
+              >
+                {filter === "paid" && <DollarSign className="h-3 w-3 mr-1" />}
+                {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              </Button>
+            ))}
+            {newPostCount > 0 && (
+              <Badge
+                variant="destructive"
+                className="animate-pulse cursor-pointer"
+                onClick={() => {
+                  setNewPostCount(0);
+                  setNewPostIds(new Set());
+                }}
+              >
+                {newPostCount} new
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-3 p-4 rounded-xl border border-yellow-500/30 bg-yellow-50/10 text-sm">
+            <XCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-yellow-600">
+                Unable to fetch posts
+              </p>
+              <p className="text-muted-foreground mt-1">{error}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {posts
+            .filter((post) => {
+              if (filterPaid === "paid") return post.isPaid;
+              if (filterPaid === "free") return !post.isPaid;
+              return true;
+            })
+            .map((post) => {
+              const isNew = newPostIds.has(post.id);
+              return (
+                <Card
+                  key={post.id}
+                  className={`overflow-hidden hover:shadow-lg transition-shadow relative ${isNew ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-background" : ""} ${commentedPostIds.has(post.id) ? "border-purple-500/50 border-2" : ""}`}
+                >
+                  {/* Top-right badges */}
+                  <div className="absolute top-2 right-2 z-10 flex gap-1.5">
+                    {commentedPostIds.has(post.id) && (
+                      <Badge className="bg-purple-600 text-white font-bold shadow-lg">
+                        <MessageCircle className="h-3 w-3 mr-1" />
+                        Commented
+                      </Badge>
+                    )}
+                    {isNew && (
+                      <Badge className="bg-blue-500 text-white font-bold animate-pulse shadow-lg">
+                        NEW
+                      </Badge>
+                    )}
+                  </div>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-2 flex-1 pr-12">
+                        <CardTitle className="text-lg leading-tight line-clamp-2">
+                          {post.title}
+                        </CardTitle>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] px-1.5 py-0"
+                          >
+                            r/{post.subreddit}
+                          </Badge>
+                          {post.isPaid ? (
+                            <Badge className="bg-green-600 hover:bg-green-700 text-white text-[10px] px-1.5 py-0">
+                              <DollarSign className="h-2.5 w-2.5 mr-0.5" />
+                              Paid
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="secondary"
+                              className="text-[10px] px-1.5 py-0 text-muted-foreground"
+                            >
+                              Free
+                            </Badge>
+                          )}
+                          {post.flair &&
+                            !post.flair.toLowerCase().includes("paid") && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] px-1.5 py-0 border-orange-300 text-orange-600"
+                              >
+                                {post.flair}
+                              </Badge>
+                            )}
+                          <span className="flex items-center text-muted-foreground">
+                            <User className="h-3 w-3 mr-1" />
+                            {post.author}
+                          </span>
+                          <span className="flex items-center text-muted-foreground font-medium">
+                            <Clock className="h-3 w-3 mr-1" />
+                            {timeAgo(post.created_utc)}
+                          </span>
+                          <a
+                            href={post.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center text-blue-600 hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3 mr-1" />
+                            Reddit
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="space-y-4">
+                    {post.allImages && post.allImages.length > 1 ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="text-xs">
+                            <ImageIcon className="h-3 w-3 mr-1" />
+                            {post.allImages.length} images
+                          </Badge>
+                        </div>
+                        <div className="grid gap-2 grid-cols-2">
+                          {post.allImages.slice(0, 4).map((imgUrl, idx) => (
+                            <div
+                              key={idx}
+                              className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
+                              onClick={() =>
+                                showImage(
+                                  imgUrl,
+                                  `Image ${idx + 1} of ${post.allImages.length}`,
+                                  imgUrl,
+                                  post.postUrl,
+                                )
+                              }
+                            >
+                              <Image
+                                src={imgUrl}
+                                alt={`Post image ${idx + 1}`}
+                                fill
+                                className="object-contain bg-black/5"
+                              />
+                              {idx === 3 && post.allImages.length > 4 && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <span className="text-white font-bold text-lg">
+                                    +{post.allImages.length - 4}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : post.imageUrl ? (
+                      <div
+                        className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() =>
+                          showImage(
+                            post.imageUrl,
+                            "Reddit Image",
+                            post.imageUrl,
+                            post.postUrl,
+                          )
+                        }
+                      >
+                        <Image
+                          src={post.imageUrl}
+                          alt="Post image"
+                          fill
+                          className="object-contain bg-black/5"
+                        />
+                      </div>
+                    ) : null}
+
+                    {post.description && (
+                      <p className="text-sm text-muted-foreground line-clamp-3">
+                        {post.description}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+                        <span>👍 {post.score}</span>
+                        <span>💬 {post.num_comments}</span>
+                      </div>
+
+                      <Button
+                        onClick={() => analyzePost(post.id)}
+                        disabled={analyzingPostId === post.id}
+                        size="sm"
+                        className="bg-blue-500 hover:bg-blue-600"
+                      >
+                        {analyzingPostId === post.id ? (
+                          <>
+                            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                            Analyzing...
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="mr-2 h-3 w-3" />
+                            Analyze & Edit
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+        </div>
+
+        {posts.length === 0 && !loading && (
+          <div className="text-center py-16">
+            <ImageIcon className="mx-auto h-16 w-16 text-muted-foreground" />
+            <h3 className="mt-4 text-xl font-semibold">No posts found</h3>
+            <p className="text-muted-foreground mt-2">
+              Check back later for new Photoshop requests from Reddit
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
