@@ -3,6 +3,7 @@ export const runtime = "nodejs"; // ensure Node runtime (Buffer required)
 
 import type { NextRequest } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 if (!process.env.GEMINI_API_KEY) {
   console.error("GEMINI_API_KEY not found in environment variables");
@@ -354,6 +355,7 @@ function processRawPosts(allPosts: any[]) {
 }
 
 export async function GET(_req: NextRequest) {
+  if (!verifyAppToken(_req)) return unauthorizedResponse();
   try {
     const url = new URL(_req.url);
     const subredditParam = url.searchParams.get("subreddits");
@@ -537,6 +539,7 @@ export async function GET(_req: NextRequest) {
 
 // POST endpoint to analyze and process a specific Reddit post
 export async function POST(request: NextRequest) {
+  if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
     const { postId } = await request.json();
 
@@ -632,6 +635,7 @@ export async function POST(request: NextRequest) {
 
 // Dedicated analysis endpoint using Vertex AI Gemini 2.5 Flash
 export async function PUT(request: NextRequest) {
+  if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
     const { title, description, imageUrl, allImages } = await request.json();
 

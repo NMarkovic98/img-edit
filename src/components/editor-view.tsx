@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { authedFetch } from "@/lib/api";
 import {
   Card,
   CardContent,
@@ -23,6 +24,8 @@ import {
   Image as ImageIcon,
   AlertTriangle,
   ShieldCheck,
+  Copy,
+  ClipboardCheck,
 } from "lucide-react";
 import Image from "next/image";
 import { useImageViewer } from "./image-viewer";
@@ -275,6 +278,59 @@ const localBrowserSave = new LocalBrowserSave();
 // Export for use in other components
 export { localBrowserSave };
 
+// ---------------------------------------------------------------------------
+// Client-side watermark generator — Canvas only, no AI model
+// ---------------------------------------------------------------------------
+async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d")!;
+
+      // Draw original image at full quality
+      ctx.drawImage(img, 0, 0);
+
+      // Watermark settings — scale text relative to image size
+      const fontSize = Math.max(14, Math.floor(Math.min(canvas.width, canvas.height) * 0.025));
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      const text = "Fixtral — Preview";
+
+      // Semi-transparent diagonal watermark across the image
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 1;
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(-Math.PI / 6); // -30 degrees
+
+      const spacing = fontSize * 4;
+      for (let y = -canvas.height; y < canvas.height; y += spacing) {
+        for (let x = -canvas.width; x < canvas.width; x += spacing) {
+          ctx.strokeText(text, x, y);
+          ctx.fillText(text, x, y);
+        }
+      }
+      ctx.restore();
+
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Canvas toBlob failed"));
+        },
+        "image/png",
+        1.0,
+      );
+    };
+    img.onerror = () => reject(new Error("Failed to load image for watermark"));
+    img.src = imageUrl;
+  });
+}
+
 interface RedditPost {
   id: string;
   title: string;
@@ -297,6 +353,7 @@ interface EditorItem {
   post: RedditPost;
   allImages: string[];
   analysis: string;
+  modelOverride?: string | null;
   timestamp: string;
 }
 
@@ -353,7 +410,21 @@ export function EditorView() {
   >("side-by-side");
   const [showOriginal, setShowOriginal] = useState(true);
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
+  const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const { showImage } = useImageViewer();
+
+  // Generate watermarked preview whenever a new editResult is ready
+  const generateWatermark = useCallback(async (imgUrl: string) => {
+    try {
+      const blob = await createWatermarkedBlob(imgUrl);
+      const url = URL.createObjectURL(blob);
+      setWatermarkedUrl(url);
+    } catch (err) {
+      console.error("Watermark generation failed:", err);
+      setWatermarkedUrl(null);
+    }
+  }, []);
 
   // Load pending item and user credits from localStorage when component mounts
   useEffect(() => {
@@ -418,7 +489,7 @@ export function EditorView() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5min client timeout for 4K images
 
-      const response = await fetch("/api/edit", {
+      const response = await authedFetch("/api/edit", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -428,6 +499,7 @@ export function EditorView() {
           imageUrl: currentItem.post.imageUrl,
           changeSummary: editPrompt,
           allImages: currentItem.allImages || [currentItem.post.imageUrl],
+          modelOverride: currentItem.modelOverride || null,
         }),
       });
 
@@ -476,6 +548,10 @@ export function EditorView() {
         });
 
         setEditResult(editResult);
+
+        // Generate watermarked preview
+        const imgSrc = editResult.generatedImages?.[0] || editResult.editedContent;
+        if (imgSrc) generateWatermark(imgSrc);
       } else {
         console.error("Edit failed:", result.error);
       }
@@ -542,6 +618,7 @@ export function EditorView() {
         setCurrentItem(null);
         setEditResult(null);
         setEditPrompt("");
+        if (watermarkedUrl) { URL.revokeObjectURL(watermarkedUrl); setWatermarkedUrl(null); }
 
         localStorage.removeItem("pendingEditorItem");
         window.dispatchEvent(
@@ -597,63 +674,46 @@ export function EditorView() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="text-center py-12 px-4 bg-gradient-to-b from-transparent via-muted/10 to-transparent">
-        <div className="flex items-center justify-center space-x-4 mb-6">
-          <div className="relative">
-            <Wand2 className="h-12 w-12 text-primary animate-pulse" />
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 rounded-full animate-ping opacity-75"></div>
-          </div>
-          <h1 className="text-5xl font-bold bg-gradient-to-r from-primary via-primary to-primary/70 bg-clip-text text-transparent">
-            AI Image Editor
-          </h1>
-        </div>
-        <p className="text-xl text-muted-foreground max-w-3xl mx-auto leading-relaxed">
-          Edit prompts and generate AI-enhanced images using Google Gemini 2.5
-          Flash Image
-        </p>
-      </div>
+    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 px-2 sm:px-0">
 
       {/* Current Item Display */}
       {currentItem ? (
         <div className="space-y-6">
           {/* Post Info */}
           <Card className="border-primary/20 bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 shadow-xl">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
+            <CardHeader className="pb-4 px-3 sm:px-6">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                 <div className="flex items-center space-x-3">
-                  <div className="p-2 bg-green-500 rounded-full">
-                    <CheckCircle className="h-6 w-6 text-white" />
+                  <div className="p-2 bg-green-500 rounded-full flex-shrink-0">
+                    <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
                   </div>
                   <div className="flex-1">
-                    <CardTitle className="text-xl font-bold">
+                    <CardTitle className="text-lg sm:text-xl font-bold">
                       Ready for Editing
                     </CardTitle>
-                    <CardDescription className="text-muted-foreground">
-                      Modify the AI-generated prompt below and generate your
-                      edited image
+                    <CardDescription className="text-muted-foreground text-sm">
+                      Modify the prompt below and generate your edited image
                     </CardDescription>
                   </div>
-                  <Badge
-                    variant="secondary"
-                    className="bg-primary/10 text-primary border-primary/20 font-semibold"
-                  >
-                    Step 2: AI Image Generation
-                  </Badge>
                 </div>
+                <Badge
+                  variant="secondary"
+                  className="bg-primary/10 text-primary border-primary/20 font-semibold text-xs sm:text-sm w-fit"
+                >
+                  Step 2: AI Image Generation
+                </Badge>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="px-3 sm:px-6">
               <div className="space-y-4">
-                <div className="bg-card p-6 rounded-xl border shadow-sm">
-                  <h4 className="font-semibold mb-3 text-card-foreground">
+                <div className="bg-card p-3 sm:p-6 rounded-xl border shadow-sm">
+                  <h4 className="font-semibold mb-2 sm:mb-3 text-card-foreground text-sm sm:text-base">
                     {currentItem.post.title}
                   </h4>
-                  <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-muted-foreground mb-3 sm:mb-4 leading-relaxed">
                     {currentItem.post.description}
                   </p>
-                  <div className="flex items-center space-x-6 text-xs text-muted-foreground">
+                  <div className="flex items-center space-x-3 sm:space-x-6 text-xs text-muted-foreground">
                     <span className="flex items-center">
                       <span className="font-medium">By</span>{" "}
                       {currentItem.post.author}
@@ -747,11 +807,11 @@ export function EditorView() {
                 requirements
               </CardDescription>
             </CardHeader>
-            <CardContent className="pt-6">
+            <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6">
               <textarea
                 value={editPrompt}
                 onChange={(e) => setEditPrompt(e.target.value)}
-                className="w-full p-4 border border-input rounded-xl resize-none focus:ring-2 focus:ring-primary/50 focus:border-primary bg-background text-foreground transition-all duration-200 min-h-[120px]"
+                className="w-full p-3 sm:p-4 border border-input rounded-xl resize-none focus:ring-2 focus:ring-primary/50 focus:border-primary bg-background text-foreground transition-all duration-200 min-h-[100px] sm:min-h-[120px] text-[16px] sm:text-sm"
                 rows={4}
                 placeholder="Enter your edit instructions..."
               />
@@ -759,12 +819,12 @@ export function EditorView() {
           </Card>
 
           {/* Generate Button */}
-          <div className="flex justify-center">
+          <div className="flex justify-center px-2">
             <Button
               onClick={generateEditedImage}
               disabled={isEditing || !editPrompt.trim()}
               size="lg"
-              className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold px-8 py-4 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold px-5 sm:px-8 py-3 sm:py-4 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto text-sm sm:text-base"
             >
               {isEditing ? (
                 <>
@@ -781,10 +841,10 @@ export function EditorView() {
           </div>
         </div>
       ) : (
-        <Card className="text-center py-20 border-dashed border-muted-foreground/20 bg-gradient-to-br from-muted/20 to-muted/10">
-          <CardContent className="space-y-6">
+        <Card className="text-center py-12 sm:py-20 border-dashed border-muted-foreground/20 bg-gradient-to-br from-muted/20 to-muted/10">
+          <CardContent className="space-y-4 sm:space-y-6">
             <div className="relative">
-              <Wand2 className="mx-auto h-20 w-20 text-muted-foreground/50" />
+              <Wand2 className="mx-auto h-14 w-14 sm:h-20 sm:w-20 text-muted-foreground/50" />
               <div className="absolute -top-2 -right-2 w-6 h-6 bg-muted-foreground/20 rounded-full animate-pulse"></div>
             </div>
             <div>
@@ -1244,6 +1304,90 @@ export function EditorView() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Watermarked Preview + Copy Reply */}
+            {watermarkedUrl && (
+              <Card className="border-purple-500/30 bg-purple-500/5 shadow-lg">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <Copy className="h-4 w-4 text-purple-500" />
+                    Watermarked Preview for Reddit Reply
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Full resolution with watermark overlay. Use the button below to copy it with your reply text.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div
+                    className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => showImage(watermarkedUrl, "Watermarked Preview", watermarkedUrl)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={watermarkedUrl}
+                      alt="Watermarked preview"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        setCopied(false);
+                        const paypalLink = localStorage.getItem("paypal_link") || "";
+                        const tipLine = paypalLink
+                          ? `A tip is appreciated: ${paypalLink}`
+                          : "";
+                        const replyText = [
+                          "Here is your edit!",
+                          "",
+                          tipLine,
+                          "Reply !solved if you like it",
+                        ]
+                          .filter(Boolean)
+                          .join("\n");
+
+                        // Try to copy image + text to clipboard
+                        const blob = await createWatermarkedBlob(
+                          editResult.generatedImages?.[0] || editResult.editedContent,
+                        );
+                        try {
+                          await navigator.clipboard.write([
+                            new ClipboardItem({
+                              "image/png": blob,
+                              "text/plain": new Blob([replyText], { type: "text/plain" }),
+                            }),
+                          ]);
+                        } catch {
+                          // Fallback: copy text only (some browsers don't support image clipboard)
+                          await navigator.clipboard.writeText(replyText);
+                        }
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 3000);
+                      } catch (err) {
+                        console.error("Copy failed:", err);
+                        alert("Copy failed. Try downloading the image instead.");
+                      }
+                    }}
+                    className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold"
+                  >
+                    {copied ? (
+                      <>
+                        <ClipboardCheck className="mr-2 h-4 w-4" />
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy Watermarked Image + Reply Text
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-[10px] text-muted-foreground text-center">
+                    Copies the watermarked image + reply text to clipboard. Paste into Reddit.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </CardContent>
         </Card>
       )}

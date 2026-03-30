@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import type { NextRequest } from "next/server";
+import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -75,6 +76,7 @@ function findRepliesToUser(
 }
 
 export async function GET(req: NextRequest) {
+  if (!verifyAppToken(req)) return unauthorizedResponse();
   try {
     const url = new URL(req.url);
     const username = url.searchParams.get("username");

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 interface ImageInput {
   base64: string;
@@ -135,6 +136,7 @@ CRITICAL RULES:
 Return ONLY valid JSON. No markdown, no code fences.`;
 
 export async function POST(request: NextRequest) {
+  if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
     const reqBody: ParseRequest = await request.json();
     const { title, body } = reqBody;

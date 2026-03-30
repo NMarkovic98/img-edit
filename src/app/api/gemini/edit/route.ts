@@ -1,6 +1,7 @@
 // src/app/api/gemini/edit/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { fal } from "@fal-ai/client";
+import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -61,6 +62,7 @@ function getImageDimensions(buf: Buffer): { width: number; height: number } {
 }
 
 export async function POST(request: NextRequest) {
+  if (!verifyAppToken(request)) return unauthorizedResponse();
   const startTime = Date.now();
 
   try {

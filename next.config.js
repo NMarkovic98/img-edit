@@ -2,16 +2,16 @@
 const nextConfig = {
   images: {
     domains: [
-      'i.redd.it',
-      'preview.redd.it',
-      'external-preview.redd.it',
-      'b.thumbs.redditmedia.com',
-      'a.thumbs.redditmedia.com',
-      'imgur.com',
-      'i.imgur.com',
-      'fal.media',
-      'v3.fal.media',
-      'storage.googleapis.com',
+      "i.redd.it",
+      "preview.redd.it",
+      "external-preview.redd.it",
+      "b.thumbs.redditmedia.com",
+      "a.thumbs.redditmedia.com",
+      "imgur.com",
+      "i.imgur.com",
+      "fal.media",
+      "v3.fal.media",
+      "storage.googleapis.com",
     ],
   },
   // experimental: {
@@ -22,6 +22,6 @@ const nextConfig = {
   //     ".git/**"
   //   ]
   // }
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;

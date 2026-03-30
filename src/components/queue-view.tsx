@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { authedFetch } from "@/lib/api";
 import {
   Card,
   CardContent,
@@ -26,6 +27,8 @@ import {
   Link,
   ShieldCheck,
   ShieldAlert,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import Image from "next/image";
 import { useImageViewer } from "./image-viewer";
@@ -86,6 +89,161 @@ function timeAgo(utc: number): string {
   return `${hours}h ${mins % 60}m ago`;
 }
 
+// ---------------------------------------------------------------------------
+// Model pricing & selection system
+// ---------------------------------------------------------------------------
+interface ModelOption {
+  id: string;
+  name: string;
+  price: string;
+  tier: string;
+}
+
+function getModelOptions(w: number, h: number): ModelOption[] {
+  const max = Math.max(w, h);
+  if (max >= 4097) {
+    return [
+      { id: "flux-2-pro", name: "FLUX 2 Pro", price: "$0.14", tier: "4K+" },
+      { id: "nano-banana-4k", name: "Nano Banana Pro 4K", price: "$0.16", tier: "4K+" },
+    ];
+  }
+  if (max >= 2560) {
+    return [
+      { id: "seedream-4k", name: "Seedream v4.5", price: "$0.04", tier: "2K" },
+      { id: "nano-banana-4k", name: "Nano Banana Pro 4K", price: "$0.16", tier: "2K" },
+    ];
+  }
+  if (max >= 1920) {
+    return [
+      { id: "seedream-2k", name: "Seedream v4.5", price: "$0.04", tier: "FHD" },
+      { id: "nano-banana-2k", name: "Nano Banana Pro 2K", price: "$0.12", tier: "FHD" },
+    ];
+  }
+  if (max >= 1280) {
+    return [
+      { id: "nano-banana-2k", name: "Nano Banana Pro 2K", price: "$0.12", tier: "HD" },
+    ];
+  }
+  return [
+    { id: "gpt-image", name: "GPT Image 1.5", price: "$0.17", tier: "SD" },
+    { id: "nano-banana-1k", name: "Nano Banana Pro 1K", price: "$0.08", tier: "SD" },
+  ];
+}
+
+// Resolution badge — loads image natively to read naturalWidth × naturalHeight
+function ResolutionBadge({ src, onDims }: { src: string; onDims?: (w: number, h: number) => void }) {
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const img = new window.Image();
+    img.onload = () => {
+      setDims({ w: img.naturalWidth, h: img.naturalHeight });
+      onDims?.(img.naturalWidth, img.naturalHeight);
+    };
+    img.src = src;
+  }, [src]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!dims) return null;
+
+  const max = Math.max(dims.w, dims.h);
+  let label: string;
+  let color: string;
+  if (max >= 3840) {
+    label = "4K";
+    color = "bg-green-600";
+  } else if (max >= 2560) {
+    label = "2K";
+    color = "bg-green-600";
+  } else if (max >= 1920) {
+    label = "FHD";
+    color = "bg-blue-600";
+  } else if (max >= 1280) {
+    label = "HD";
+    color = "bg-yellow-600";
+  } else {
+    label = "SD";
+    color = "bg-red-600";
+  }
+
+  return (
+    <div className={`absolute bottom-1.5 left-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}>
+      {dims.w}×{dims.h} {label}
+    </div>
+  );
+}
+
+// Image slider component for multi-image gallery posts
+function ImageSlider({
+  images,
+  postUrl,
+  showImage,
+  onDims,
+}: {
+  images: string[];
+  postUrl: string;
+  showImage: (src: string, title: string, downloadUrl: string, postUrl: string) => void;
+  onDims?: (w: number, h: number) => void;
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  const goTo = (idx: number) => {
+    if (idx < 0) setCurrentIndex(images.length - 1);
+    else if (idx >= images.length) setCurrentIndex(0);
+    else setCurrentIndex(idx);
+  };
+
+  return (
+    <div className="relative">
+      <div
+        className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer"
+        onClick={() =>
+          showImage(
+            images[currentIndex],
+            `Image ${currentIndex + 1} of ${images.length}`,
+            images[currentIndex],
+            postUrl,
+          )
+        }
+      >
+        <Image
+          src={images[currentIndex]}
+          alt={`Image ${currentIndex + 1} of ${images.length}`}
+          fill
+          className="object-contain bg-black/5"
+        />
+        <ResolutionBadge src={images[currentIndex]} onDims={currentIndex === 0 ? onDims : undefined} />
+      </div>
+      {/* Navigation arrows */}
+      <button
+        onClick={(e) => { e.stopPropagation(); goTo(currentIndex - 1); }}
+        className="absolute left-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 transition-colors"
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); goTo(currentIndex + 1); }}
+        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 transition-colors"
+      >
+        <ChevronRight className="h-4 w-4" />
+      </button>
+      {/* Dots indicator */}
+      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+        {images.map((_, idx) => (
+          <button
+            key={idx}
+            onClick={(e) => { e.stopPropagation(); setCurrentIndex(idx); }}
+            className={`w-1.5 h-1.5 rounded-full transition-colors ${idx === currentIndex ? "bg-white" : "bg-white/50"}`}
+          />
+        ))}
+      </div>
+      {/* Counter badge */}
+      <div className="absolute top-2 left-2 bg-black/60 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-md">
+        {currentIndex + 1}/{images.length}
+      </div>
+    </div>
+  );
+}
+
 export function QueueView() {
   const [posts, setPosts] = useState<RedditPost[]>([]);
   const [editRequests, setEditRequests] = useState<EditRequest[]>([]);
@@ -105,6 +263,9 @@ export function QueueView() {
   const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
     new Set(),
   );
+  // Per-post image dimensions and selected model
+  const [postDims, setPostDims] = useState<Record<string, { w: number; h: number }>>({});
+  const [postModel, setPostModel] = useState<Record<string, string>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
 
@@ -160,7 +321,7 @@ export function QueueView() {
       if (!silent) setLoading(true);
       try {
         const subredditsParam = selectedSubreddits.join(",");
-        const response = await fetch(
+        const response = await authedFetch(
           `/api/reddit/posts?subreddits=${subredditsParam}`,
         );
         const data = await response.json();
@@ -206,7 +367,7 @@ export function QueueView() {
       }
 
       // Now analyze with Google Gemini 2.5 Flash
-      const analysisResponse = await fetch("/api/reddit/posts", {
+      const analysisResponse = await authedFetch("/api/reddit/posts", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -261,6 +422,7 @@ export function QueueView() {
       post: post,
       allImages: post.allImages || [post.imageUrl],
       analysis: analysis,
+      modelOverride: postModel[post.id] || null,
       timestamp: new Date().toISOString(),
     };
 
@@ -301,60 +463,7 @@ export function QueueView() {
   }, [autoRefresh, fetchPosts]);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 sm:space-y-8 mobile-container">
-      {/* Header Section */}
-      <div className="text-center py-8 sm:py-16 px-4 bg-gradient-to-b from-transparent via-muted/10 to-transparent mobile-container">
-        <div className="flex flex-col items-center justify-center space-y-4 mb-6 sm:mb-8">
-          <div className="flex items-center justify-center space-x-3 sm:space-x-4">
-            <div className="relative flex-shrink-0">
-              <Wand2 className="h-8 w-8 sm:h-12 sm:w-12 text-primary animate-pulse" />
-              <div className="absolute -top-1 -right-1 w-3 h-3 sm:w-4 sm:h-4 bg-yellow-500 rounded-full animate-ping opacity-75"></div>
-            </div>
-            <h1 className="text-3xl sm:text-5xl font-bold bg-gradient-to-r from-primary via-primary to-primary/70 bg-clip-text text-transparent mobile-responsive-large">
-              Fixtral
-            </h1>
-          </div>
-        </div>
-        <p className="text-lg sm:text-xl text-muted-foreground max-w-3xl mx-auto mb-8 sm:mb-12 leading-relaxed mobile-responsive-text px-4 sm:px-0">
-          AI-Powered Reddit Photoshop Assistant - Automated image editing with
-          Google Gemini AI
-        </p>
-
-        {/* Workflow Steps */}
-        <div className="flex justify-center px-4">
-          <div className="flex flex-row items-center justify-center space-x-2 sm:space-x-4 sm:space-x-6 bg-gradient-to-r from-muted/30 via-muted/50 to-muted/30 p-3 sm:p-6 rounded-2xl border shadow-lg backdrop-blur-sm w-full max-w-md sm:max-w-none mx-auto">
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
-                1
-              </div>
-              <span className="text-xs sm:text-sm font-semibold">Analyze</span>
-            </div>
-            <div className="flex items-center justify-center">
-              <span className="text-xs sm:text-sm font-bold text-muted-foreground px-1 sm:px-2">
-                →
-              </span>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
-                2
-              </div>
-              <span className="text-xs sm:text-sm font-semibold">Edit</span>
-            </div>
-            <div className="flex items-center justify-center">
-              <span className="text-xs sm:text-sm font-bold text-muted-foreground px-1 sm:px-2">
-                →
-              </span>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              <div className="w-7 h-7 sm:w-10 sm:h-10 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-full flex items-center justify-center text-xs sm:text-sm font-bold shadow-lg touch-target">
-                3
-              </div>
-              <span className="text-xs sm:text-sm font-semibold">Save</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
       {/* Analysis Result Modal */}
       {analysisResult && (
         <Card className="border-primary/20 bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 shadow-xl mobile-card">
@@ -551,99 +660,36 @@ export function QueueView() {
 
       {/* Posts Grid */}
       <div className="space-y-6">
-        <div className="flex flex-col gap-4 sm:gap-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div className="space-y-2">
-              <h2 className="text-2xl font-bold mobile-responsive-heading">
-                Reddit Posts Queue
-              </h2>
-              <p className="text-muted-foreground mobile-responsive-text">
-                Latest Photoshop requests from{" "}
-                {selectedSubreddits.map((s) => `r/${s}`).join(", ")}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Button
-                onClick={() => setAutoRefresh(!autoRefresh)}
-                variant={autoRefresh ? "default" : "outline"}
-                size="sm"
-                className={autoRefresh ? "bg-green-600 hover:bg-green-700" : ""}
-              >
-                <Clock className="mr-1 h-3 w-3" />
-                {autoRefresh ? "Auto: ON" : "Auto: OFF"}
-              </Button>
-              <Button
-                onClick={() => fetchPosts()}
-                disabled={loading}
-                className="mobile-button"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4" />
-                    Refresh
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Subreddit Selector */}
-          <div className="flex flex-wrap gap-2 items-center">
-            {AVAILABLE_SUBREDDITS.map((sub) => {
-              const count = posts.filter((p) => p.subreddit === sub.id).length;
-              return (
-                <Button
-                  key={sub.id}
-                  variant={
-                    selectedSubreddits.includes(sub.id) ? "default" : "outline"
-                  }
-                  size="sm"
-                  onClick={() => toggleSubreddit(sub.id)}
-                  className={`relative ${
-                    selectedSubreddits.includes(sub.id)
-                      ? "bg-orange-500 hover:bg-orange-600 text-white"
-                      : "hover:bg-muted/50"
-                  }`}
-                >
-                  {sub.label}
-                  {count > 0 && (
-                    <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-white/20 text-white">
-                      {count}
-                    </span>
-                  )}
-                </Button>
-              );
-            })}
-            <div className="w-px h-5 bg-border mx-1" />
-            {(["all", "paid", "free"] as const).map((filter) => (
-              <Button
-                key={filter}
-                variant={filterPaid === filter ? "default" : "outline"}
-                size="sm"
-                onClick={() => setFilterPaid(filter)}
-                className={
-                  filterPaid === filter
-                    ? filter === "paid"
-                      ? "bg-green-600 hover:bg-green-700 text-white"
-                      : filter === "free"
-                        ? "bg-gray-500 hover:bg-gray-600 text-white"
-                        : ""
-                    : "hover:bg-muted/50"
-                }
-              >
-                {filter === "paid" && <DollarSign className="h-3 w-3 mr-1" />}
-                {filter.charAt(0).toUpperCase() + filter.slice(1)}
-              </Button>
-            ))}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setAutoRefresh(!autoRefresh)}
+              variant={autoRefresh ? "default" : "outline"}
+              size="sm"
+              className={`h-8 px-2.5 text-xs ${autoRefresh ? "bg-green-600 hover:bg-green-700" : ""}`}
+            >
+              <Clock className="mr-1 h-3 w-3" />
+              {autoRefresh ? "Auto" : "Auto"}
+            </Button>
+            <Button
+              onClick={() => fetchPosts()}
+              disabled={loading}
+              size="sm"
+              className="h-8 px-2.5 text-xs"
+            >
+              {loading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>
+                  <Loader2 className="mr-1 h-3 w-3" />
+                  Refresh
+                </>
+              )}
+            </Button>
             {newPostCount > 0 && (
               <Badge
                 variant="destructive"
-                className="animate-pulse cursor-pointer"
+                className="animate-pulse cursor-pointer text-[10px] px-1.5 py-0"
                 onClick={() => {
                   setNewPostCount(0);
                   setNewPostIds(new Set());
@@ -653,6 +699,9 @@ export function QueueView() {
               </Badge>
             )}
           </div>
+          <span className="text-xs text-muted-foreground">
+            {posts.length} posts
+          </span>
         </div>
 
         {error && (
@@ -754,44 +803,12 @@ export function QueueView() {
 
                   <CardContent className="space-y-4">
                     {post.allImages && post.allImages.length > 1 ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="text-xs">
-                            <ImageIcon className="h-3 w-3 mr-1" />
-                            {post.allImages.length} images
-                          </Badge>
-                        </div>
-                        <div className="grid gap-2 grid-cols-2">
-                          {post.allImages.slice(0, 4).map((imgUrl, idx) => (
-                            <div
-                              key={idx}
-                              className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
-                              onClick={() =>
-                                showImage(
-                                  imgUrl,
-                                  `Image ${idx + 1} of ${post.allImages.length}`,
-                                  imgUrl,
-                                  post.postUrl,
-                                )
-                              }
-                            >
-                              <Image
-                                src={imgUrl}
-                                alt={`Post image ${idx + 1}`}
-                                fill
-                                className="object-contain bg-black/5"
-                              />
-                              {idx === 3 && post.allImages.length > 4 && (
-                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                  <span className="text-white font-bold text-lg">
-                                    +{post.allImages.length - 4}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <ImageSlider
+                        images={post.allImages}
+                        postUrl={post.postUrl}
+                        showImage={showImage}
+                        onDims={(w, h) => setPostDims((prev) => ({ ...prev, [post.id]: { w, h } }))}
+                      />
                     ) : post.imageUrl ? (
                       <div
                         className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
@@ -810,6 +827,7 @@ export function QueueView() {
                           fill
                           className="object-contain bg-black/5"
                         />
+                        <ResolutionBadge src={post.imageUrl} onDims={(w, h) => setPostDims((prev) => ({ ...prev, [post.id]: { w, h } }))} />
                       </div>
                     ) : null}
 
@@ -819,31 +837,63 @@ export function QueueView() {
                       </p>
                     )}
 
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2 text-xs text-muted-foreground">
-                        <span>👍 {post.score}</span>
-                        <span>💬 {post.num_comments}</span>
-                      </div>
-
-                      <Button
-                        onClick={() => analyzePost(post.id)}
-                        disabled={analyzingPostId === post.id}
-                        size="sm"
-                        className="bg-blue-500 hover:bg-blue-600"
-                      >
-                        {analyzingPostId === post.id ? (
-                          <>
-                            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                            Analyzing...
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 className="mr-2 h-3 w-3" />
-                            Analyze & Edit
-                          </>
-                        )}
-                      </Button>
-                    </div>
+                    {/* Model selector + price + action */}
+                    {(() => {
+                      const dims = postDims[post.id];
+                      const models = dims ? getModelOptions(dims.w, dims.h) : [];
+                      const selectedModelId = postModel[post.id] || models[0]?.id;
+                      const selectedModel = models.find((m) => m.id === selectedModelId) || models[0];
+                      return (
+                        <div className="space-y-2">
+                          {models.length > 1 && dims && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {models.map((m) => (
+                                <button
+                                  key={m.id}
+                                  onClick={() => setPostModel((prev) => ({ ...prev, [post.id]: m.id }))}
+                                  className={`text-[10px] px-2 py-1 rounded-md border transition-colors ${
+                                    (selectedModelId || models[0]?.id) === m.id
+                                      ? "bg-primary text-primary-foreground border-primary"
+                                      : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                                  }`}
+                                >
+                                  {m.name} <span className="font-bold">{m.price}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <span>👍 {post.score}</span>
+                              <span>💬 {post.num_comments}</span>
+                              {selectedModel && (
+                                <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
+                                  {selectedModel.price}
+                                </Badge>
+                              )}
+                            </div>
+                            <Button
+                              onClick={() => analyzePost(post.id)}
+                              disabled={analyzingPostId === post.id}
+                              size="sm"
+                              className="bg-blue-500 hover:bg-blue-600"
+                            >
+                              {analyzingPostId === post.id ? (
+                                <>
+                                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                  Analyzing...
+                                </>
+                              ) : (
+                                <>
+                                  <Wand2 className="mr-2 h-3 w-3" />
+                                  Analyze & Edit
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               );

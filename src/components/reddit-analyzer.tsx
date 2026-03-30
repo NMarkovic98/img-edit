@@ -1,132 +1,139 @@
-'use client'
+"use client";
 
-import { useState, useEffect } from 'react'
-import Image from 'next/image'
+import { useState, useEffect } from "react";
+import Image from "next/image";
+import { authedFetch } from "@/lib/api";
 
 interface RedditPost {
-  id: string
-  title: string
-  description: string
-  imageUrl: string
-  postUrl: string
-  created_utc: number
-  created_date: string
-  author: string
-  score: number
-  num_comments: number
-  subreddit: string
+  id: string;
+  title: string;
+  description: string;
+  imageUrl: string;
+  postUrl: string;
+  created_utc: number;
+  created_date: string;
+  author: string;
+  score: number;
+  num_comments: number;
+  subreddit: string;
 }
 
 interface AnalysisResult {
-  ok: boolean
-  postId: string
-  originalPost: RedditPost
-  analysis: string
-  editedContent?: string
-  timestamp: string
+  ok: boolean;
+  postId: string;
+  originalPost: RedditPost;
+  analysis: string;
+  editedContent?: string;
+  timestamp: string;
 }
 
 interface EditResult {
-  ok: boolean
-  postId: string
-  analysis: string
-  editedContent: string
-  method?: string
-  hasImageData?: boolean
-  generatedImages?: string[]
-  timestamp: string
+  ok: boolean;
+  postId: string;
+  analysis: string;
+  editedContent: string;
+  method?: string;
+  hasImageData?: boolean;
+  generatedImages?: string[];
+  timestamp: string;
 }
 
 export default function RedditAnalyzer() {
-  const [posts, setPosts] = useState<RedditPost[]>([])
-  const [loading, setLoading] = useState(false)
-  const [analyzingPostId, setAnalyzingPostId] = useState<string | null>(null)
-  const [editingPostId, setEditingPostId] = useState<string | null>(null)
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
-  const [editResult, setEditResult] = useState<EditResult | null>(null)
+  const [posts, setPosts] = useState<RedditPost[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [analyzingPostId, setAnalyzingPostId] = useState<string | null>(null);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
+    null,
+  );
+  const [editResult, setEditResult] = useState<EditResult | null>(null);
 
   // Fetch Reddit posts on component mount
   useEffect(() => {
-    fetchPosts()
-  }, [])
+    fetchPosts();
+  }, []);
 
   const fetchPosts = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      const response = await fetch('/api/reddit/posts')
-      const data = await response.json()
+      const response = await authedFetch("/api/reddit/posts");
+      const data = await response.json();
       if (data.ok) {
-        setPosts(data.posts)
+        setPosts(data.posts);
       }
     } catch (error) {
-      console.error('Error fetching posts:', error)
+      console.error("Error fetching posts:", error);
     }
-    setLoading(false)
-  }
+    setLoading(false);
+  };
 
   const analyzePost = async (postId: string) => {
-    setAnalyzingPostId(postId)
+    setAnalyzingPostId(postId);
     try {
       // First, get the post details
-      const postResponse = await fetch('/api/reddit/posts', {
-        method: 'GET',
-      })
+      const postResponse = await authedFetch("/api/reddit/posts", {
+        method: "GET",
+      });
 
-      const postsData = await postResponse.json()
-      const post = postsData.posts.find((p: any) => p.id === postId)
+      const postsData = await postResponse.json();
+      const post = postsData.posts.find((p: any) => p.id === postId);
 
       if (!post) {
-        throw new Error('Post not found')
+        throw new Error("Post not found");
       }
 
       // Now analyze with Google Gemini 2.5 Flash
-      const analysisResponse = await fetch('/api/reddit/posts', {
-        method: 'PUT',
+      const analysisResponse = await authedFetch("/api/reddit/posts", {
+        method: "PUT",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           title: post.title,
           description: post.description,
-          imageUrl: post.imageUrl
+          imageUrl: post.imageUrl,
         }),
-      })
+      });
 
-      const result = await analysisResponse.json()
+      const result = await analysisResponse.json();
       if (result.ok) {
         setAnalysisResult({
           ok: true,
           postId: postId,
           originalPost: post,
           analysis: result.changeSummary,
-          timestamp: result.timestamp
-        })
+          timestamp: result.timestamp,
+        });
       } else {
-        console.error('Analysis failed:', result.error)
+        console.error("Analysis failed:", result.error);
       }
     } catch (error) {
-      console.error('Error analyzing post:', error)
+      console.error("Error analyzing post:", error);
     }
-    setAnalyzingPostId(null)
-  }
+    setAnalyzingPostId(null);
+  };
 
-  const executeEdit = async (postId: string, imageUrl: string, prompt: string) => {
-    setEditingPostId(postId)
+  const executeEdit = async (
+    postId: string,
+    imageUrl: string,
+    prompt: string,
+  ) => {
+    setEditingPostId(postId);
     try {
-      const response = await fetch('/api/edit', {
-        method: 'POST',
+      const response = await authedFetch("/api/edit", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           imageUrl: imageUrl,
-          changeSummary: prompt
+          changeSummary: prompt,
         }),
-      })
+      });
 
-      const result = await response.json()
+      const result = await response.json();
       if (result.ok) {
-        console.log('Edit result:', result);
+        console.log("Edit result:", result);
         setEditResult({
           ok: true,
           postId: postId,
@@ -135,16 +142,16 @@ export default function RedditAnalyzer() {
           method: result.method,
           hasImageData: result.hasImageData,
           generatedImages: result.generatedImages,
-          timestamp: result.timestamp
-        })
+          timestamp: result.timestamp,
+        });
       } else {
-        console.error('Edit failed:', result.error)
+        console.error("Edit failed:", result.error);
       }
     } catch (error) {
-      console.error('Error executing edit:', error)
+      console.error("Error executing edit:", error);
     }
-    setEditingPostId(null)
-  }
+    setEditingPostId(null);
+  };
 
   return (
     <div className="max-w-6xl mx-auto p-6">
@@ -164,11 +171,22 @@ export default function RedditAnalyzer() {
           </span>
         </div>
         <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg max-w-2xl mx-auto">
-          <h3 className="font-semibold text-yellow-800 mb-2">🎯 How It Works:</h3>
+          <h3 className="font-semibold text-yellow-800 mb-2">
+            🎯 How It Works:
+          </h3>
           <ol className="text-xs text-yellow-700 space-y-1 text-left">
-            <li>1. <strong>Analysis:</strong> Google Gemini 2.5 Flash analyzes Reddit post + image → generates concise edit prompt</li>
-            <li>2. <strong>Review:</strong> User reviews the generated prompt</li>
-            <li>3. <strong>Execute:</strong> Gemini 2.5 Flash Image (via OpenRouter) processes image + prompt → detailed editing instructions</li>
+            <li>
+              1. <strong>Analysis:</strong> Google Gemini 2.5 Flash analyzes
+              Reddit post + image → generates concise edit prompt
+            </li>
+            <li>
+              2. <strong>Review:</strong> User reviews the generated prompt
+            </li>
+            <li>
+              3. <strong>Execute:</strong> Gemini 2.5 Flash Image (via
+              OpenRouter) processes image + prompt → detailed editing
+              instructions
+            </li>
           </ol>
         </div>
       </div>
@@ -185,8 +203,13 @@ export default function RedditAnalyzer() {
             <div>
               <h3 className="font-semibold mb-2">Original Post:</h3>
               <div className="space-y-2">
-                <p><strong>Title:</strong> {analysisResult.originalPost.title}</p>
-                <p><strong>Description:</strong> {analysisResult.originalPost.description}</p>
+                <p>
+                  <strong>Title:</strong> {analysisResult.originalPost.title}
+                </p>
+                <p>
+                  <strong>Description:</strong>{" "}
+                  {analysisResult.originalPost.description}
+                </p>
                 <Image
                   src={analysisResult.originalPost.imageUrl}
                   alt="Original image"
@@ -204,21 +227,27 @@ export default function RedditAnalyzer() {
                   <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded font-medium">
                     ✅ Analysis Complete
                   </span>
-                  <span className="text-xs text-gray-600">via Google Gemini 2.5 Flash (Official API)</span>
+                  <span className="text-xs text-gray-600">
+                    via Google Gemini 2.5 Flash (Official API)
+                  </span>
                 </div>
                 <h3 className="font-semibold mb-2">Generated Edit Prompt:</h3>
                 <div className="bg-white p-3 rounded border">
-                  <p className="text-sm leading-relaxed">{analysisResult.analysis}</p>
+                  <p className="text-sm leading-relaxed">
+                    {analysisResult.analysis}
+                  </p>
                 </div>
               </div>
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => executeEdit(
-                    analysisResult.postId,
-                    analysisResult.originalPost.imageUrl,
-                    analysisResult.analysis
-                  )}
+                  onClick={() =>
+                    executeEdit(
+                      analysisResult.postId,
+                      analysisResult.originalPost.imageUrl,
+                      analysisResult.analysis,
+                    )
+                  }
                   disabled={editingPostId === analysisResult.postId}
                   className="flex-1 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
                 >
@@ -230,7 +259,9 @@ export default function RedditAnalyzer() {
                   ) : (
                     <>
                       🎨 Generate AI Image
-                      <span className="text-xs block opacity-90">Gemini 2.5 Flash Image via OpenRouter</span>
+                      <span className="text-xs block opacity-90">
+                        Gemini 2.5 Flash Image via OpenRouter
+                      </span>
                     </>
                   )}
                 </button>
@@ -258,7 +289,8 @@ export default function RedditAnalyzer() {
               Step 2: AI Image Generation Complete
             </span>
             <span className="text-xs text-gray-600">
-              via Gemini 2.5 Flash Image ({editResult.method === 'base64' ? 'Base64' : 'Direct URL'})
+              via Gemini 2.5 Flash Image (
+              {editResult.method === "base64" ? "Base64" : "Direct URL"})
             </span>
           </div>
 
@@ -274,7 +306,8 @@ export default function RedditAnalyzer() {
 
               <div className="bg-white p-4 rounded border">
                 {/* Display all generated images */}
-                {editResult.generatedImages && editResult.generatedImages.length > 0 ? (
+                {editResult.generatedImages &&
+                editResult.generatedImages.length > 0 ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {editResult.generatedImages.map((imageUrl, index) => (
@@ -291,7 +324,7 @@ export default function RedditAnalyzer() {
                           />
                           <button
                             onClick={() => {
-                              const link = document.createElement('a');
+                              const link = document.createElement("a");
                               link.href = imageUrl;
                               link.download = `ai-edited-image-${index + 1}-${Date.now()}.png`;
                               link.click();
@@ -307,10 +340,14 @@ export default function RedditAnalyzer() {
                       ✨ AI-generated edited images with SynthID watermarks
                     </p>
                   </div>
-                ) : editResult.editedContent.includes('data:image') ? (
+                ) : editResult.editedContent.includes("data:image") ? (
                   <div className="space-y-4">
                     <Image
-                      src={editResult.editedContent.match(/data:image[^"']+/)?.[0] || ''}
+                      src={
+                        editResult.editedContent.match(
+                          /data:image[^"']+/,
+                        )?.[0] || ""
+                      }
                       alt="AI-generated edited image"
                       width={400}
                       height={300}
@@ -320,13 +357,17 @@ export default function RedditAnalyzer() {
                       ✨ AI-generated edited image with SynthID watermark
                     </p>
                   </div>
-                ) : editResult.editedContent.includes('http') ? (
+                ) : editResult.editedContent.includes("http") ? (
                   <div className="text-center space-y-4">
                     <p className="text-sm text-gray-600">
                       Image generated successfully!
                     </p>
                     <Image
-                      src={editResult.editedContent.match(/https?:\/\/[^\s]+/)?.[0] || ''}
+                      src={
+                        editResult.editedContent.match(
+                          /https?:\/\/[^\s]+/,
+                        )?.[0] || ""
+                      }
                       alt="AI-generated edited image"
                       width={400}
                       height={300}
@@ -341,8 +382,9 @@ export default function RedditAnalyzer() {
                   <div className="space-y-4">
                     <div className="bg-yellow-50 p-3 rounded border border-yellow-200">
                       <p className="text-sm text-yellow-800">
-                        <strong>⚠️ Note:</strong> Model returned text response instead of image.
-                        This might be due to model limitations or rate limits.
+                        <strong>⚠️ Note:</strong> Model returned text response
+                        instead of image. This might be due to model limitations
+                        or rate limits.
                       </p>
                     </div>
                     <div className="whitespace-pre-wrap text-sm leading-relaxed bg-gray-50 p-3 rounded max-h-60 overflow-y-auto">
@@ -353,11 +395,14 @@ export default function RedditAnalyzer() {
 
                 {/* Download and Copy functionality */}
                 <div className="mt-4 flex gap-2 justify-center">
-                  {editResult.editedContent.includes('data:image') && (
+                  {editResult.editedContent.includes("data:image") && (
                     <button
                       onClick={() => {
-                        const link = document.createElement('a');
-                        link.href = editResult.editedContent.match(/data:image[^"']+/)?.[0] || '';
+                        const link = document.createElement("a");
+                        link.href =
+                          editResult.editedContent.match(
+                            /data:image[^"']+/,
+                          )?.[0] || "";
                         link.download = `ai-edited-image-${Date.now()}.png`;
                         link.click();
                       }}
@@ -369,7 +414,7 @@ export default function RedditAnalyzer() {
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(editResult.editedContent);
-                      alert('Content copied to clipboard!');
+                      alert("Content copied to clipboard!");
                     }}
                     className="px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
                   >
@@ -387,13 +432,18 @@ export default function RedditAnalyzer() {
               </div>
 
               <div className="bg-blue-50 p-4 rounded border border-blue-200">
-                <h4 className="font-semibold text-blue-800 mb-2">🎯 Processing Details:</h4>
+                <h4 className="font-semibold text-blue-800 mb-2">
+                  🎯 Processing Details:
+                </h4>
                 <div className="space-y-2 text-sm text-blue-700">
                   <div className="flex justify-between">
                     <span>Method:</span>
                     <span className="font-medium">
-                      {editResult.method === 'google_gemini' ? 'Google Gemini API' :
-                       editResult.method === 'base64' ? 'Base64 Upload' : 'Direct URL'}
+                      {editResult.method === "google_gemini"
+                        ? "Google Gemini API"
+                        : editResult.method === "base64"
+                          ? "Base64 Upload"
+                          : "Direct URL"}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -407,19 +457,25 @@ export default function RedditAnalyzer() {
                   <div className="flex justify-between">
                     <span>Images Generated:</span>
                     <span className="font-medium text-green-600">
-                      {editResult.generatedImages ? editResult.generatedImages.length : '1'}
+                      {editResult.generatedImages
+                        ? editResult.generatedImages.length
+                        : "1"}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span>Watermark:</span>
-                    <span className="font-medium text-orange-600">SynthID Applied</span>
+                    <span className="font-medium text-orange-600">
+                      SynthID Applied
+                    </span>
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
                 <p className="text-xs text-yellow-800">
-                  💡 <strong>AI-Generated Image!</strong> This is a fully edited image created by Gemini 2.5 Flash Image based on the Reddit request. Download it or use it directly!
+                  💡 <strong>AI-Generated Image!</strong> This is a fully edited
+                  image created by Gemini 2.5 Flash Image based on the Reddit
+                  request. Download it or use it directly!
                 </p>
               </div>
             </div>
@@ -444,20 +500,25 @@ export default function RedditAnalyzer() {
           disabled={loading}
           className="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
         >
-          {loading ? 'Loading...' : '🔄 Refresh Posts'}
+          {loading ? "Loading..." : "🔄 Refresh Posts"}
         </button>
       </div>
 
       {loading && (
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Fetching fresh posts from r/PhotoshopRequest...</p>
+          <p className="mt-4 text-gray-600">
+            Fetching fresh posts from r/PhotoshopRequest...
+          </p>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {posts.map((post) => (
-          <div key={post.id} className="bg-white border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+          <div
+            key={post.id}
+            className="bg-white border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+          >
             <div className="p-4">
               <h3 className="font-semibold text-sm mb-2 line-clamp-2">
                 {post.title}
@@ -484,7 +545,7 @@ export default function RedditAnalyzer() {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => window.open(post.postUrl, '_blank')}
+                  onClick={() => window.open(post.postUrl, "_blank")}
                   className="flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200"
                 >
                   View on Reddit
@@ -501,7 +562,7 @@ export default function RedditAnalyzer() {
                       Analyzing...
                     </span>
                   ) : (
-                    '🧠 Analyze & Edit'
+                    "🧠 Analyze & Edit"
                   )}
                 </button>
               </div>
@@ -516,5 +577,5 @@ export default function RedditAnalyzer() {
         </div>
       )}
     </div>
-  )
+  );
 }
