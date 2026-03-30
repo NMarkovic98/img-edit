@@ -136,14 +136,16 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
 }
 
 // In-memory cache to avoid hammering Reddit
+// NOTE: On serverless (Vercel) this cache is per-instance, so we use a generous TTL
+// and also leverage Next.js fetch cache as a secondary layer.
 let postsCache: { posts: any[]; timestamp: number } = {
   posts: [],
   timestamp: 0,
 };
-const CACHE_TTL_MS = 25000; // 25 seconds — slightly less than the 30s refresh interval
+const CACHE_TTL_MS = 55000; // 55 seconds — keep cache alive longer to survive across rapid requests
 
-// Fetch posts via Reddit's public JSON API using multi-subreddit endpoint (1 request for all)
-async function fetchPostsViaPublicAPI(
+// Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
+async function fetchPostsViaAPI(
   subreddits: string[] = ["PhotoshopRequest"],
 ) {
   // Return cached data if fresh enough
@@ -163,60 +165,80 @@ async function fetchPostsViaPublicAPI(
     return processRawPosts(filtered);
   }
 
-  // Use multi-subreddit endpoint: r/sub1+sub2+sub3/new.json — ONE request
   const multiSub = subreddits.join("+");
-  console.log(
-    `Fetching from r/${multiSub}/new.json (single request for ${subreddits.length} subreddits)`,
-  );
+
+  // Try OAuth API first (600 req/10min limit vs ~100/min for public)
+  const hasRedditCredentials =
+    process.env.REDDIT_CLIENT_ID &&
+    process.env.REDDIT_CLIENT_SECRET &&
+    process.env.REDDIT_USERNAME &&
+    process.env.REDDIT_PASSWORD;
 
   try {
-    const res = await fetch(
-      `https://www.reddit.com/r/${multiSub}/new.json?limit=100&raw_json=1`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-          Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Accept-Encoding": "gzip, deflate, br",
-          Connection: "keep-alive",
-          "Sec-Fetch-Dest": "document",
-          "Sec-Fetch-Mode": "navigate",
-          "Sec-Fetch-Site": "none",
-        },
-        cache: "no-store",
-      },
-    );
+    let allPosts: any[];
 
-    if (res.status === 429) {
-      const resetAfter = parseInt(
-        res.headers.get("x-ratelimit-reset") || "60",
-        10,
+    if (hasRedditCredentials) {
+      console.log(
+        `Fetching via OAuth API: r/${multiSub}/new (${subreddits.length} subreddits)`,
       );
-      console.warn(
-        `Rate limited, reset in ${resetAfter}s. Returning cached data.`,
+      const token = await getAccessToken();
+      const response = await redditGet(
+        `/r/${multiSub}/new?limit=100&raw_json=1`,
+        token,
       );
-      // Return stale cache instead of nothing
-      if (postsCache.posts.length > 0) {
-        const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
-        const filtered = postsCache.posts.filter((p: any) =>
-          subSet.has((p.subreddit || "").toLowerCase()),
+      allPosts = response.data.children.map((child: any) => child.data);
+    } else {
+      console.log(
+        `Fetching from r/${multiSub}/new.json (public API, ${subreddits.length} subreddits)`,
+      );
+      const res = await fetch(
+        `https://www.reddit.com/r/${multiSub}/new.json?limit=100&raw_json=1`,
+        {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            Connection: "keep-alive",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+          },
+          // Use Next.js fetch cache as a secondary cache layer on Vercel
+          next: { revalidate: 30 },
+        } as any,
+      );
+
+      if (res.status === 429) {
+        const resetAfter = parseInt(
+          res.headers.get("x-ratelimit-reset") || "60",
+          10,
         );
-        return processRawPosts(filtered);
+        console.warn(
+          `Rate limited, reset in ${resetAfter}s. Returning cached data.`,
+        );
+        if (postsCache.posts.length > 0) {
+          const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
+          const filtered = postsCache.posts.filter((p: any) =>
+            subSet.has((p.subreddit || "").toLowerCase()),
+          );
+          return processRawPosts(filtered);
+        }
+        return [];
       }
-      return [];
-    }
 
-    if (!res.ok) {
-      console.error(`Reddit public API error: ${res.status}`);
-      return postsCache.posts.length > 0
-        ? processRawPosts(postsCache.posts)
-        : [];
-    }
+      if (!res.ok) {
+        console.error(`Reddit public API error: ${res.status}`);
+        return postsCache.posts.length > 0
+          ? processRawPosts(postsCache.posts)
+          : [];
+      }
 
-    const data = await res.json();
-    const allPosts = data.data.children.map((child: any) => child.data);
+      const data = await res.json();
+      allPosts = data.data.children.map((child: any) => child.data);
+    }
 
     // Update cache
     postsCache = { posts: allPosts, timestamp: Date.now() };
@@ -363,139 +385,15 @@ export async function GET(_req: NextRequest) {
       ? subredditParam.split(",").map((s) => s.trim())
       : ["PhotoshopRequest"];
 
-    const hasRedditCredentials =
-      process.env.REDDIT_CLIENT_ID &&
-      process.env.REDDIT_CLIENT_SECRET &&
-      process.env.REDDIT_USERNAME &&
-      process.env.REDDIT_PASSWORD;
-
-    if (!hasRedditCredentials) {
-      console.log(
-        `Reddit credentials not configured, using public JSON API for: ${subreddits.join(", ")}`,
-      );
-      const publicPosts = await fetchPostsViaPublicAPI(subreddits);
-      publicPosts.sort((a: any, b: any) => b.created_utc - a.created_utc);
-      console.log(`Found ${publicPosts.length} image posts via public API`);
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          posts: publicPosts,
-          total: publicPosts.length,
-          timestamp: new Date().toISOString(),
-          source: "public",
-        }),
-        {
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    console.log("Starting Reddit GET request...");
-    const token = await getAccessToken();
-    console.log("Token obtained, fetching posts...");
-
-    const response = await redditGet("/r/PhotoshopRequest/new?limit=50", token);
-    console.log("Reddit API response received successfully");
-
-    const posts = response.data.children.map((child: any) => child.data);
-
-    const thirtyMinAgo = Date.now() / 1000 - 30 * 60;
-
-    const imagePosts = posts
-      .filter((post: any) => {
-        const hasImage =
-          post.url &&
-          (post.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
-            post.url.includes("i.redd.it") ||
-            post.url.includes("i.imgur.com") ||
-            post.url.includes("redditmedia") ||
-            (post.preview &&
-              post.preview.images &&
-              post.preview.images.length > 0));
-
-        const isRecent = post.created_utc > thirtyMinAgo;
-
-        return hasImage && isRecent;
-      })
-      .map((post: any) => {
-        let imageUrl = post.url;
-
-        if (post.is_gallery && post.media_metadata) {
-          const firstImageId = Object.keys(post.media_metadata)[0];
-          const meta = post.media_metadata[firstImageId];
-          if (meta && meta.status === "valid") {
-            const ext =
-              (meta.m || "image/jpg").split("/")[1] === "png" ? "png" : "jpg";
-            imageUrl = `https://i.redd.it/${firstImageId}.${ext}`;
-          } else if (meta?.s?.u) {
-            imageUrl = meta.s.u.replace(/&amp;/g, "&");
-          }
-        } else if (
-          post.crosspost_parent_list &&
-          post.crosspost_parent_list.length > 0
-        ) {
-          const originalPost = post.crosspost_parent_list[0];
-          if (
-            originalPost.url &&
-            (originalPost.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
-              originalPost.url.includes("i.redd.it") ||
-              originalPost.url.includes("i.imgur.com"))
-          ) {
-            imageUrl = originalPost.url;
-          }
-        } else if (
-          post.preview &&
-          post.preview.images &&
-          post.preview.images.length > 0
-        ) {
-          const previewImage = post.preview.images[0];
-          const previewUrl =
-            previewImage.source?.url?.replace(/&amp;/g, "&") || "";
-          const idMatch = previewUrl.match(
-            /preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/,
-          );
-          if (idMatch) {
-            imageUrl = `https://i.redd.it/${idMatch[1]}.${idMatch[2]}`;
-          } else if (previewImage.source?.url) {
-            imageUrl = previewUrl;
-          }
-        }
-
-        const flair = (post.link_flair_text || "").toLowerCase();
-        const isPaid =
-          flair.includes("paid") || post.title.toLowerCase().includes("[paid]");
-
-        return {
-          id: post.id,
-          title: post.title,
-          description: post.selftext || post.title,
-          imageUrl: imageUrl,
-          allImages: [imageUrl],
-          isGallery: false,
-          imageCount: 1,
-          postUrl: `https://reddit.com${post.permalink}`,
-          created_utc: post.created_utc,
-          created_date: new Date(post.created_utc * 1000).toISOString(),
-          author: post.author,
-          score: post.score,
-          num_comments: post.num_comments,
-          subreddit: post.subreddit,
-          thumbnail: post.thumbnail,
-          upvote_ratio: post.upvote_ratio,
-          flair: post.link_flair_text || null,
-          isPaid,
-        };
-      });
-
-    console.log(
-      `Found ${imagePosts.length} image posts from r/PhotoshopRequest in the last 24 hours`,
-    );
+    const posts = await fetchPostsViaAPI(subreddits);
+    posts.sort((a: any, b: any) => b.created_utc - a.created_utc);
+    console.log(`Found ${posts.length} image posts`);
 
     return new Response(
       JSON.stringify({
         ok: true,
-        posts: imagePosts,
-        total: imagePosts.length,
+        posts,
+        total: posts.length,
         timestamp: new Date().toISOString(),
       }),
       {
@@ -517,7 +415,7 @@ export async function GET(_req: NextRequest) {
         error: String(err?.message || err),
         isRateLimited,
         solution: isRateLimited
-          ? "Reddit is rate limiting your requests. Please wait 5-10 minutes and try again. If this persists, consider using a different IP or implementing longer delays between requests."
+          ? "Reddit is rate limiting your requests. Please wait 5-10 minutes and try again."
           : "Check your Reddit API credentials and ensure your app is properly registered.",
         stack: err?.stack,
         envCheck: {
