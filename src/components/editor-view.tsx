@@ -294,14 +294,27 @@ function DimensionsBadge({ src }: { src: string }) {
   const max = Math.max(dims.w, dims.h);
   let label: string;
   let color: string;
-  if (max >= 3840) { label = "4K"; color = "bg-green-600"; }
-  else if (max >= 2560) { label = "2K"; color = "bg-green-600"; }
-  else if (max >= 1920) { label = "FHD"; color = "bg-blue-600"; }
-  else if (max >= 1280) { label = "HD"; color = "bg-yellow-600"; }
-  else { label = "SD"; color = "bg-red-600"; }
+  if (max >= 3840) {
+    label = "4K";
+    color = "bg-green-600";
+  } else if (max >= 2560) {
+    label = "2K";
+    color = "bg-green-600";
+  } else if (max >= 1920) {
+    label = "FHD";
+    color = "bg-blue-600";
+  } else if (max >= 1280) {
+    label = "HD";
+    color = "bg-yellow-600";
+  } else {
+    label = "SD";
+    color = "bg-red-600";
+  }
 
   return (
-    <div className={`absolute bottom-1.5 right-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}>
+    <div
+      className={`absolute bottom-1.5 right-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}
+    >
       {dims.w}×{dims.h} {label}
     </div>
   );
@@ -765,9 +778,7 @@ export function EditorView() {
                   </div>
                 </div>
 
-                <div
-                  className="relative aspect-video overflow-hidden rounded-xl border bg-black/5 shadow-md"
-                >
+                <div className="relative aspect-video overflow-hidden rounded-xl border bg-black/5 shadow-md">
                   <Image
                     src={currentItem.post.imageUrl}
                     alt="Original Reddit image"

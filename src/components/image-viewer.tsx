@@ -1,75 +1,87 @@
-'use client'
+"use client";
 
-import { useEffect, useState, createContext, useContext, ReactNode } from 'react'
-import { X, Download, ExternalLink, ZoomIn, ZoomOut } from 'lucide-react'
-import Image from 'next/image'
+import {
+  useEffect,
+  useState,
+  createContext,
+  useContext,
+  ReactNode,
+} from "react";
+import { X, Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
+import Image from "next/image";
 
 interface ImageViewerProps {
-  src: string
-  alt: string
-  onClose: () => void
-  downloadUrl?: string
-  externalUrl?: string
+  src: string;
+  alt: string;
+  onClose: () => void;
+  downloadUrl?: string;
+  externalUrl?: string;
 }
 
-export function ImageViewer({ src, alt, onClose, downloadUrl, externalUrl }: ImageViewerProps) {
-  const [zoom, setZoom] = useState(0.6) // Start with 60% zoom for better fit
-  const [isLoading, setIsLoading] = useState(true)
-  const [showHelp, setShowHelp] = useState(false)
+export function ImageViewer({
+  src,
+  alt,
+  onClose,
+  downloadUrl,
+  externalUrl,
+}: ImageViewerProps) {
+  const [zoom, setZoom] = useState(0.6); // Start with 60% zoom for better fit
+  const [isLoading, setIsLoading] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
 
   // Zoom controls
-  const zoomIn = () => setZoom(prev => Math.min(prev * 1.2, 3))
-  const zoomOut = () => setZoom(prev => Math.max(prev / 1.2, 0.3))
-  const resetZoom = () => setZoom(1)
+  const zoomIn = () => setZoom((prev) => Math.min(prev * 1.2, 3));
+  const zoomOut = () => setZoom((prev) => Math.max(prev / 1.2, 0.3));
+  const resetZoom = () => setZoom(1);
 
   // Double click to reset zoom
   const handleImageDoubleClick = () => {
-    resetZoom()
-  }
+    resetZoom();
+  };
 
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose()
-      } else if (event.key === '+' || event.key === '=') {
-        event.preventDefault()
-        zoomIn()
-      } else if (event.key === '-' || event.key === '_') {
-        event.preventDefault()
-        zoomOut()
-      } else if (event.key === '0') {
-        event.preventDefault()
-        resetZoom()
+      if (event.key === "Escape") {
+        onClose();
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        zoomIn();
+      } else if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        zoomOut();
+      } else if (event.key === "0") {
+        event.preventDefault();
+        resetZoom();
       }
-    }
+    };
 
-    document.addEventListener('keydown', handleKeyDown)
-    document.body.style.overflow = 'hidden'
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = 'unset'
-    }
-  }, [onClose])
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "unset";
+    };
+  }, [onClose]);
 
   // Handle click outside
   const handleBackdropClick = (event: React.MouseEvent) => {
     if (event.target === event.currentTarget) {
-      onClose()
+      onClose();
     }
-  }
+  };
 
   const handleDownload = () => {
     if (downloadUrl) {
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.download = `fixtral-image-${Date.now()}.png`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `fixtral-image-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
-  }
+  };
 
   return (
     <div
@@ -183,8 +195,8 @@ export function ImageViewer({ src, alt, onClose, downloadUrl, externalUrl }: Ima
           className="relative max-w-[95vw] max-h-[95vh] w-auto h-auto"
           style={{
             transform: `scale(${zoom})`,
-            transformOrigin: 'center center',
-            transition: zoom === 1 ? 'transform 0.2s ease-out' : 'none'
+            transformOrigin: "center center",
+            transition: zoom === 1 ? "transform 0.2s ease-out" : "none",
           }}
         >
           {isLoading && (
@@ -205,7 +217,7 @@ export function ImageViewer({ src, alt, onClose, downloadUrl, externalUrl }: Ima
             onLoadingComplete={() => setIsLoading(false)}
             onLoad={() => setIsLoading(false)}
             onDoubleClick={handleImageDoubleClick}
-            style={{ imageRendering: zoom > 1 ? 'auto' : 'auto' }}
+            style={{ imageRendering: zoom > 1 ? "auto" : "auto" }}
           />
 
           {/* Image info overlay */}
@@ -219,50 +231,60 @@ export function ImageViewer({ src, alt, onClose, downloadUrl, externalUrl }: Ima
                   </p>
                 )}
               </div>
-              <div className="text-white/70 text-xs">
-                Press ? for help
-              </div>
+              <div className="text-white/70 text-xs">Press ? for help</div>
             </div>
           </div>
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 interface ImageViewerContextType {
-  showImage: (src: string, alt: string, downloadUrl?: string, externalUrl?: string) => void
-  hideImage: () => void
+  showImage: (
+    src: string,
+    alt: string,
+    downloadUrl?: string,
+    externalUrl?: string,
+  ) => void;
+  hideImage: () => void;
 }
 
-const ImageViewerContext = createContext<ImageViewerContextType | undefined>(undefined)
+const ImageViewerContext = createContext<ImageViewerContextType | undefined>(
+  undefined,
+);
 
 export function ImageViewerProvider({ children }: { children: ReactNode }) {
   const [viewerState, setViewerState] = useState<{
-    isOpen: boolean
-    src: string
-    alt: string
-    downloadUrl?: string
-    externalUrl?: string
+    isOpen: boolean;
+    src: string;
+    alt: string;
+    downloadUrl?: string;
+    externalUrl?: string;
   }>({
     isOpen: false,
-    src: '',
-    alt: '',
-  })
+    src: "",
+    alt: "",
+  });
 
-  const showImage = (src: string, alt: string, downloadUrl?: string, externalUrl?: string) => {
+  const showImage = (
+    src: string,
+    alt: string,
+    downloadUrl?: string,
+    externalUrl?: string,
+  ) => {
     setViewerState({
       isOpen: true,
       src,
       alt,
       downloadUrl,
       externalUrl,
-    })
-  }
+    });
+  };
 
   const hideImage = () => {
-    setViewerState(prev => ({ ...prev, isOpen: false }))
-  }
+    setViewerState((prev) => ({ ...prev, isOpen: false }));
+  };
 
   return (
     <ImageViewerContext.Provider value={{ showImage, hideImage }}>
@@ -277,13 +299,15 @@ export function ImageViewerProvider({ children }: { children: ReactNode }) {
         />
       )}
     </ImageViewerContext.Provider>
-  )
+  );
 }
 
 export function useImageViewer() {
-  const context = useContext(ImageViewerContext)
+  const context = useContext(ImageViewerContext);
   if (context === undefined) {
-    throw new Error('useImageViewer must be used within an ImageViewerProvider')
+    throw new Error(
+      "useImageViewer must be used within an ImageViewerProvider",
+    );
   }
-  return context
+  return context;
 }
