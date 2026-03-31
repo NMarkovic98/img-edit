@@ -16,7 +16,7 @@ const SUBREDDITS = [
   "estoration",
   "editmyphoto",
 ];
-const FETCH_INTERVAL = 30000; // 30 seconds
+const FETCH_INTERVAL = 10000; // 10 seconds
 const REPLY_CHECK_INTERVAL = 60000; // 60 seconds
 
 function getRedditUsername(): string {
@@ -29,18 +29,22 @@ interface PushState {
   isSubscribed: boolean;
   isSupported: boolean;
   isMuted: boolean;
+  isMonitoring: boolean;
   subscribe: () => Promise<void>;
   unsubscribe: () => Promise<void>;
   toggleMute: () => void;
+  toggleMonitoring: () => Promise<void>;
 }
 
 const PushContext = createContext<PushState>({
   isSubscribed: false,
   isSupported: false,
   isMuted: false,
+  isMonitoring: false,
   subscribe: async () => {},
   unsubscribe: async () => {},
   toggleMute: () => {},
+  toggleMonitoring: async () => {},
 });
 
 export const usePushNotifications = () => useContext(PushContext);
@@ -200,7 +204,9 @@ export function NotificationProvider({
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [isMonitoring, setIsMonitoring] = useState(false);
   const isMutedRef = useRef(false);
+  const isMonitoringRef = useRef(false);
   const swRegistration = useRef<ServiceWorkerRegistration | null>(null);
 
   // Load persisted IDs and mute state on mount
@@ -210,6 +216,12 @@ export function NotificationProvider({
     const muted = localStorage.getItem("notificationsMuted") === "true";
     setIsMuted(muted);
     isMutedRef.current = muted;
+
+    // Check background monitor status
+    authedFetch("/api/monitor")
+      .then((r) => r.json())
+      .then((d) => { if (d.ok) { setIsMonitoring(d.enabled); isMonitoringRef.current = d.enabled; } })
+      .catch(() => {});
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -220,6 +232,24 @@ export function NotificationProvider({
       return next;
     });
   }, []);
+
+  const toggleMonitoring = useCallback(async () => {
+    const newState = !isMonitoring;
+    try {
+      const res = await authedFetch("/api/monitor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: newState }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setIsMonitoring(data.enabled);
+        isMonitoringRef.current = data.enabled;
+      }
+    } catch (err) {
+      console.error("Toggle monitoring error:", err);
+    }
+  }, [isMonitoring]);
 
   // ─── Service Worker & Push Registration ─────────────────────────
   useEffect(() => {
@@ -269,12 +299,19 @@ export function NotificationProvider({
           .buffer as ArrayBuffer,
       });
 
-      // Send subscription to server
+      // Send subscription to server (in-tab push)
       await authedFetch("/api/push", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscription: sub.toJSON() }),
       });
+
+      // Also register with Cloudflare Worker for background push
+      await authedFetch("/api/monitor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: sub.toJSON() }),
+      }).catch(() => {}); // non-critical
 
       setIsSubscribed(true);
       console.log("Push subscription active");
@@ -297,6 +334,14 @@ export function NotificationProvider({
             action: "unsubscribe",
           }),
         });
+
+        // Also remove from Cloudflare Worker
+        await authedFetch("/api/monitor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unsubscribeEndpoint: sub.endpoint }),
+        }).catch(() => {});
+
         await sub.unsubscribe();
       }
       setIsSubscribed(false);
@@ -379,10 +424,13 @@ export function NotificationProvider({
             );
           }
 
-          sendPushNotification(
-            `PAID: ${paidPosts.length} new request${paidPosts.length > 1 ? "s" : ""}`,
-            msg,
-          );
+          // Only send push from frontend if background monitor is off
+          if (!isMonitoringRef.current) {
+            sendPushNotification(
+              `PAID: ${paidPosts.length} new request${paidPosts.length > 1 ? "s" : ""}`,
+              msg,
+            );
+          }
 
           // Dispatch special event for paid posts UI highlight
           window.dispatchEvent(
@@ -402,7 +450,8 @@ export function NotificationProvider({
             );
           }
 
-          if (paidPosts.length === 0) {
+          // Only send push from frontend if background monitor is off
+          if (paidPosts.length === 0 && !isMonitoringRef.current) {
             sendPushNotification(
               `${freePosts.length} new free request${freePosts.length > 1 ? "s" : ""}`,
               msg,
@@ -500,9 +549,11 @@ export function NotificationProvider({
         isSubscribed,
         isSupported,
         isMuted,
+        isMonitoring,
         subscribe: subscribeToPush,
         unsubscribe: unsubscribeFromPush,
         toggleMute,
+        toggleMonitoring,
       }}
     >
       {children}

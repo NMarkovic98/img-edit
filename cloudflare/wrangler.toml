@@ -1,0 +1,13 @@
+name = "fixtral-monitor"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[triggers]
+crons = ["* * * * *"]  # Every minute
+
+[[kv_namespaces]]
+binding = "KV"
+id = "699122c8430449dfa2aa7796998a1b23"
+
+[vars]
+REDDIT_PROXY_URL = "https://reddit-proxy.pomocnih.workers.dev"

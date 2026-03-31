@@ -34,6 +34,10 @@ async function redditFetch(url: string) {
     cache: "no-store",
   });
 
+  if (res.status === 429) {
+    throw new Error("RATE_LIMITED");
+  }
+
   if (!res.ok) {
     throw new Error(`Reddit API error: ${res.status}`);
   }
@@ -158,9 +162,10 @@ export async function GET(req: NextRequest) {
     );
   } catch (err: any) {
     console.error("Replies endpoint error:", err);
+    const isRateLimited = err?.message === "RATE_LIMITED" || err?.message?.includes("429");
     return new Response(
-      JSON.stringify({ ok: false, error: String(err?.message || err) }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ ok: false, error: String(err?.message || err), rateLimited: isRateLimited }),
+      { status: isRateLimited ? 429 : 500, headers: { "Content-Type": "application/json" } },
     );
   }
 }

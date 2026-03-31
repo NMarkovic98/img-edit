@@ -151,34 +151,11 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
   };
 }
 
-// In-memory cache to avoid hammering Reddit
-// NOTE: On serverless (Vercel) this cache is per-instance, so we use a generous TTL
-// and also leverage Next.js fetch cache as a secondary layer.
-let postsCache: { posts: any[]; timestamp: number } = {
-  posts: [],
-  timestamp: 0,
-};
-const CACHE_TTL_MS = 55000; // 55 seconds — keep cache alive longer to survive across rapid requests
+// Last successful response — used ONLY as fallback when rate-limited or erroring
+let lastPosts: any[] = [];
 
 // Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
-async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]) {
-  // Return cached data if fresh enough
-  const now = Date.now();
-  if (
-    postsCache.posts.length > 0 &&
-    now - postsCache.timestamp < CACHE_TTL_MS
-  ) {
-    console.log(
-      `Returning cached posts (${postsCache.posts.length} posts, ${Math.round((now - postsCache.timestamp) / 1000)}s old)`,
-    );
-    // Still filter by selected subreddits from the cache
-    const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
-    const filtered = postsCache.posts.filter((p: any) =>
-      subSet.has((p.subreddit || "").toLowerCase()),
-    );
-    return processRawPosts(filtered);
-  }
-
+async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
   const multiSub = subreddits.join("+");
 
   // Try OAuth API first (600 req/10min limit vs ~100/min for public)
@@ -220,9 +197,8 @@ async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]) {
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
           },
-          // Use Next.js fetch cache as a secondary cache layer on Vercel
-          next: { revalidate: 30 },
-        } as any,
+          cache: "no-store",
+        },
       );
 
       if (res.status === 429) {
@@ -231,38 +207,38 @@ async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]) {
           10,
         );
         console.warn(
-          `Rate limited, reset in ${resetAfter}s. Returning cached data.`,
+          `Rate limited, reset in ${resetAfter}s. Returning last known data.`,
         );
-        if (postsCache.posts.length > 0) {
+        if (lastPosts.length > 0) {
           const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
-          const filtered = postsCache.posts.filter((p: any) =>
+          const filtered = lastPosts.filter((p: any) =>
             subSet.has((p.subreddit || "").toLowerCase()),
           );
-          return processRawPosts(filtered);
+          const posts = processRawPosts(filtered);
+          return { posts, rateLimited: true, resetAfter };
         }
-        return [];
+        return { posts: [], rateLimited: true, resetAfter };
       }
 
       if (!res.ok) {
         console.error(`Reddit public API error: ${res.status}`);
-        return postsCache.posts.length > 0
-          ? processRawPosts(postsCache.posts)
-          : [];
+        return lastPosts.length > 0
+          ? { posts: processRawPosts(lastPosts), rateLimited: false }
+          : { posts: [], rateLimited: false };
       }
 
       const data = await res.json();
       allPosts = data.data.children.map((child: any) => child.data);
     }
 
-    // Update cache
-    postsCache = { posts: allPosts, timestamp: Date.now() };
+    // Store last successful fetch for rate-limit fallback
+    lastPosts = allPosts;
     console.log(`Fetched ${allPosts.length} posts from Reddit`);
 
-    return processRawPosts(allPosts);
+    return { posts: processRawPosts(allPosts), rateLimited: false };
   } catch (err) {
     console.error("Reddit fetch error:", err);
-    // Return stale cache on error
-    return postsCache.posts.length > 0 ? processRawPosts(postsCache.posts) : [];
+    return lastPosts.length > 0 ? { posts: processRawPosts(lastPosts), rateLimited: false } : { posts: [], rateLimited: false };
   }
 }
 
@@ -395,25 +371,21 @@ export async function GET(_req: NextRequest) {
   try {
     const url = new URL(_req.url);
     const subredditParam = url.searchParams.get("subreddits");
-    const noCache = url.searchParams.get("noCache") === "1";
     const subreddits = subredditParam
       ? subredditParam.split(",").map((s) => s.trim())
       : ["PhotoshopRequest"];
 
-    // Bust server-side cache when user explicitly clicks Refresh
-    if (noCache) {
-      postsCache = { posts: [], timestamp: 0 };
-    }
-
-    const posts = await fetchPostsViaAPI(subreddits);
-    posts.sort((a: any, b: any) => b.created_utc - a.created_utc);
-    console.log(`Found ${posts.length} image posts`);
+    const result = await fetchPostsViaAPI(subreddits);
+    result.posts.sort((a: any, b: any) => b.created_utc - a.created_utc);
+    console.log(`Found ${result.posts.length} image posts`);
 
     return new Response(
       JSON.stringify({
         ok: true,
-        posts,
-        total: posts.length,
+        posts: result.posts,
+        total: result.posts.length,
+        rateLimited: result.rateLimited,
+        resetAfter: result.resetAfter,
         timestamp: new Date().toISOString(),
       }),
       {

@@ -15,6 +15,7 @@ import {
   Volume2,
   VolumeX,
   LogOut,
+  Radio,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
@@ -27,9 +28,11 @@ export default function Dashboard() {
     isSubscribed,
     isSupported,
     isMuted,
+    isMonitoring,
     subscribe,
     unsubscribe,
     toggleMute,
+    toggleMonitoring,
   } = usePushNotifications();
   const router = useRouter();
 
@@ -148,6 +151,24 @@ export default function Dashboard() {
                     <VolumeX className="h-4 w-4 text-red-500" />
                   ) : (
                     <Volume2 className="h-4 w-4 text-green-500" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleMonitoring}
+                  className="touch-target relative h-9 w-9 p-0"
+                  title={
+                    isMonitoring
+                      ? "Background monitor ON — push notifications even when tab is closed"
+                      : "Background monitor OFF — enable to get push when tab is closed"
+                  }
+                >
+                  <Radio
+                    className={`h-4 w-4 ${isMonitoring ? "text-green-500" : "text-muted-foreground"}`}
+                  />
+                  {isMonitoring && (
+                    <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                   )}
                 </Button>
                 <ThemeToggle />

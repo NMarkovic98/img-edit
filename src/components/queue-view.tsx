@@ -319,6 +319,7 @@ export function QueueView() {
   const [newPostCount, setNewPostCount] = useState(0);
   const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
   const [error, setError] = useState<string | null>(null);
+  const [rateLimited, setRateLimited] = useState(false);
   const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
     new Set(),
   );
@@ -330,19 +331,19 @@ export function QueueView() {
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
 
-  // Re-render every 30s to update "time ago" labels
+  // Re-render every 10s to update "time ago" labels
   useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 30000);
+    const timer = setInterval(() => setTick((t) => t + 1), 10000);
     return () => clearInterval(timer);
   }, []);
 
-  // Auto-clear NEW badges after 30 seconds so already-seen posts don't stay highlighted
+  // Auto-clear NEW badges after 10 seconds so already-seen posts don't stay highlighted
   useEffect(() => {
     if (newPostIds.size === 0) return;
     const timer = setTimeout(() => {
       setNewPostIds(new Set());
       setNewPostCount(0);
-    }, 30000);
+    }, 10000);
     return () => clearTimeout(timer);
   }, [newPostIds]);
 
@@ -400,10 +401,16 @@ export function QueueView() {
 
         if (!data.ok && data.isRateLimited) {
           setError("Reddit is rate-limiting requests. Returning cached data.");
+          setRateLimited(true);
+        } else if (data.rateLimited) {
+          setRateLimited(true);
+          setError(null);
         } else if (!data.ok) {
           setError(data.error || "Failed to fetch posts");
+          setRateLimited(false);
         } else {
           setError(null);
+          setRateLimited(false);
         }
 
         if (data.ok) {
@@ -543,12 +550,12 @@ export function QueueView() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh every 10 seconds
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
       fetchPosts(true); // silent refresh
-    }, 30000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchPosts]);
 
@@ -793,6 +800,13 @@ export function QueueView() {
             {posts.length} posts
           </span>
         </div>
+
+        {rateLimited && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/30 bg-red-50/10 text-xs text-red-400 animate-pulse">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>Rate limited by Reddit — showing cached data</span>
+          </div>
+        )}
 
         {error && (
           <div className="flex items-start gap-3 p-4 rounded-xl border border-yellow-500/30 bg-yellow-50/10 text-sm">
