@@ -49,20 +49,30 @@ self.addEventListener("notificationclick", (event) => {
 
   if (event.action === "dismiss") return;
 
-  const url = event.notification.data?.url || "/app";
+  const postId = event.notification.data?.postId;
+  const baseUrl = event.notification.data?.url || "/app";
+  const targetUrl = postId ? `${baseUrl}?post=${postId}` : baseUrl;
 
   event.waitUntil(
     clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
-        // Focus existing window if available
+        // Focus existing window and navigate it
         for (const client of clientList) {
           if (client.url.includes("/app") && "focus" in client) {
-            return client.focus();
+            client.focus();
+            // Post message to scroll to the specific post
+            if (postId) {
+              client.postMessage({
+                type: "NAVIGATE_TO_POST",
+                postId: postId,
+              });
+            }
+            return client;
           }
         }
-        // Otherwise open new window
-        return clients.openWindow(url);
+        // Otherwise open new window with query param
+        return clients.openWindow(targetUrl);
       }),
   );
 });

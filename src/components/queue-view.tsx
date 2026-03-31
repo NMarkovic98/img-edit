@@ -330,6 +330,34 @@ export function QueueView() {
   const [postModel, setPostModel] = useState<Record<string, string>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
+  const [highlightPostId, setHighlightPostId] = useState<string | null>(null);
+
+  // Check URL for ?post= param (from notification click) and listen for SW messages
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const postParam = params.get("post");
+    if (postParam) {
+      setHighlightPostId(postParam);
+      // Clean up URL
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    const handleSWMessage = (event: MessageEvent) => {
+      if (event.data?.type === "NAVIGATE_TO_POST" && event.data.postId) {
+        setHighlightPostId(event.data.postId);
+        // Scroll to it after a short delay for render
+        setTimeout(() => {
+          const el = document.getElementById(`post-${event.data.postId}`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 300);
+      }
+    };
+
+    navigator.serviceWorker?.addEventListener("message", handleSWMessage);
+    return () => {
+      navigator.serviceWorker?.removeEventListener("message", handleSWMessage);
+    };
+  }, []);
 
   // Re-render every 10s to update "time ago" labels
   useEffect(() => {
@@ -346,6 +374,17 @@ export function QueueView() {
     }, 10000);
     return () => clearTimeout(timer);
   }, [newPostIds]);
+
+  // Scroll to highlighted post when posts load
+  useEffect(() => {
+    if (!highlightPostId || posts.length === 0) return;
+    const el = document.getElementById(`post-${highlightPostId}`);
+    if (el) {
+      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+      // Clear highlight after 5 seconds
+      setTimeout(() => setHighlightPostId(null), 5000);
+    }
+  }, [highlightPostId, posts]);
 
   // Listen for global notification events from NotificationProvider
   useEffect(() => {
@@ -416,11 +455,13 @@ export function QueueView() {
         if (data.ok) {
           const rawPosts: RedditPost[] = data.posts || [];
 
-          // Deduplicate posts by ID
+          // Deduplicate posts by ID and filter out solved
           const seen = new Set<string>();
           const fetchedPosts = rawPosts.filter((p) => {
             if (seen.has(p.id)) return false;
             seen.add(p.id);
+            // Filter out solved requests
+            if (p.flair && p.flair.toLowerCase().includes("solved")) return false;
             return true;
           });
 
@@ -535,11 +576,6 @@ export function QueueView() {
         oldValue: null,
         storageArea: localStorage,
       }),
-    );
-
-    // Show success message
-    alert(
-      "Post sent to Editor! The app will switch to the Editor tab automatically.",
     );
   };
 
@@ -830,7 +866,8 @@ export function QueueView() {
               return (
                 <Card
                   key={post.id}
-                  className={`overflow-hidden hover:shadow-lg transition-shadow relative ${isNew ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-background" : ""} ${commentedPostIds.has(post.id) ? "border-purple-500/50 border-2" : ""}`}
+                  id={`post-${post.id}`}
+                  className={`overflow-hidden hover:shadow-lg transition-shadow relative ${isNew ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-background" : ""} ${commentedPostIds.has(post.id) ? "border-purple-500/50 border-2" : ""} ${highlightPostId === post.id ? "ring-2 ring-orange-500 ring-offset-2 ring-offset-background animate-pulse" : ""}`}
                 >
                   {/* Top-right badges */}
                   <div className="absolute top-2 right-2 z-10 flex gap-1.5">

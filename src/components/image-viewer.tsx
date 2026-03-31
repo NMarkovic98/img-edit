@@ -200,7 +200,7 @@ export function ImageViewer({ src, alt, onClose, downloadUrl, externalUrl }: Ima
             height={1080}
             className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-pointer"
             priority
-            unoptimized={src?.startsWith('data:')}
+            unoptimized
             sizes="(max-width: 768px) 95vw, (max-width: 1200px) 90vw, 85vw"
             onLoadingComplete={() => setIsLoading(false)}
             onLoad={() => setIsLoading(false)}

@@ -278,6 +278,35 @@ const localBrowserSave = new LocalBrowserSave();
 // Export for use in other components
 export { localBrowserSave };
 
+// Dimensions badge for images
+function DimensionsBadge({ src }: { src: string }) {
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    if (!src) return;
+    const img = new window.Image();
+    img.onload = () => setDims({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = src;
+  }, [src]);
+
+  if (!dims) return null;
+
+  const max = Math.max(dims.w, dims.h);
+  let label: string;
+  let color: string;
+  if (max >= 3840) { label = "4K"; color = "bg-green-600"; }
+  else if (max >= 2560) { label = "2K"; color = "bg-green-600"; }
+  else if (max >= 1920) { label = "FHD"; color = "bg-blue-600"; }
+  else if (max >= 1280) { label = "HD"; color = "bg-yellow-600"; }
+  else { label = "SD"; color = "bg-red-600"; }
+
+  return (
+    <div className={`absolute bottom-1.5 right-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}>
+      {dims.w}×{dims.h} {label}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Client-side watermark generator — Canvas only, no AI model
 // ---------------------------------------------------------------------------
@@ -737,26 +766,19 @@ export function EditorView() {
                 </div>
 
                 <div
-                  className="relative aspect-video overflow-hidden rounded-xl border bg-card shadow-md cursor-pointer hover:shadow-lg transition-all duration-300 group"
-                  onClick={() =>
-                    showImage(
-                      currentItem.post.imageUrl,
-                      "Original Image",
-                      currentItem.post.imageUrl,
-                      currentItem.post.postUrl,
-                    )
-                  }
+                  className="relative aspect-video overflow-hidden rounded-xl border bg-black/5 shadow-md"
                 >
                   <Image
                     src={currentItem.post.imageUrl}
                     alt="Original Reddit image"
                     fill
-                    className="object-cover group-hover:scale-105 transition-transform duration-300"
+                    className="object-contain"
+                    unoptimized
                   />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 rounded-xl"></div>
                   <div className="absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded-md font-medium">
                     Main Image
                   </div>
+                  <DimensionsBadge src={currentItem.post.imageUrl} />
                 </div>
 
                 {/* Reference images */}
@@ -1096,27 +1118,29 @@ export function EditorView() {
                     )}
                   </div>
                   <div
-                    className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                    className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
                     onClick={() =>
                       currentItem &&
                       showImage(
                         currentItem.post.imageUrl,
                         "Original Image",
                         currentItem.post.imageUrl,
-                        currentItem.post.postUrl,
                       )
                     }
                   >
                     {currentItem && (
-                      <Image
-                        src={currentItem.post.imageUrl}
-                        alt="Original image"
-                        fill
-                        className="object-cover"
-                        unoptimized={currentItem.post.imageUrl?.startsWith(
-                          "data:",
-                        )}
-                      />
+                      <>
+                        <Image
+                          src={currentItem.post.imageUrl}
+                          alt="Original image"
+                          fill
+                          className="object-contain"
+                          unoptimized={currentItem.post.imageUrl?.startsWith(
+                            "data:",
+                          )}
+                        />
+                        <DimensionsBadge src={currentItem.post.imageUrl} />
+                      </>
                     )}
                   </div>
                 </div>
@@ -1151,7 +1175,7 @@ export function EditorView() {
                       {editResult.generatedImages.map((imageUrl, index) => (
                         <div
                           key={index}
-                          className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                          className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
                           onClick={() =>
                             showImage(
                               imageUrl,
@@ -1164,9 +1188,10 @@ export function EditorView() {
                             src={imageUrl}
                             alt={`AI-generated edited image ${index + 1}`}
                             fill
-                            className="object-cover"
+                            className="object-contain"
                             unoptimized
                           />
+                          <DimensionsBadge src={imageUrl} />
                         </div>
                       ))}
                       <div className="text-center">
@@ -1178,7 +1203,7 @@ export function EditorView() {
                   ) : editResult.editedContent.includes("data:image") ||
                     editResult.editedContent.startsWith("http") ? (
                     <div
-                      className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                      className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
                       onClick={() => {
                         const imgSrc = editResult.editedContent.includes(
                           "data:image",
@@ -1200,7 +1225,7 @@ export function EditorView() {
                         }
                         alt="AI-generated edited image"
                         fill
-                        className="object-cover"
+                        className="object-contain"
                         unoptimized
                       />
                     </div>
@@ -1251,7 +1276,7 @@ export function EditorView() {
                 </div>
 
                 <div
-                  className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                  className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
                   onClick={() => {
                     const imageSrc = showOriginal
                       ? currentItem?.post.imageUrl || ""
@@ -1264,11 +1289,8 @@ export function EditorView() {
                       ? currentItem?.post.imageUrl || ""
                       : editResult.generatedImages?.[0] ||
                         editResult.editedContent;
-                    const externalUrl = showOriginal
-                      ? currentItem?.post.postUrl
-                      : undefined;
 
-                    showImage(imageSrc, imageAlt, downloadUrl, externalUrl);
+                    showImage(imageSrc, imageAlt, downloadUrl);
                   }}
                 >
                   <Image
@@ -1280,7 +1302,7 @@ export function EditorView() {
                     }
                     alt="Comparison image"
                     fill
-                    className="object-cover"
+                    className="object-contain"
                     unoptimized={!showOriginal}
                   />
                 </div>
@@ -1380,14 +1402,23 @@ export function EditorView() {
                             ? blob
                             : new Blob([blob], { type: "image/png" });
                         try {
+                          // Try writing image only (most browsers can't mix image+text)
                           await navigator.clipboard.write([
                             new ClipboardItem({
                               "image/png": pngBlob,
-                              "text/plain": new Blob([replyText], {
-                                type: "text/plain",
-                              }),
                             }),
                           ]);
+                          // Also copy text separately to a hidden textarea as fallback
+                          try {
+                            const textArea = document.createElement("textarea");
+                            textArea.value = replyText;
+                            textArea.style.position = "fixed";
+                            textArea.style.left = "-9999px";
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            document.execCommand("copy");
+                            document.body.removeChild(textArea);
+                          } catch {}
                         } catch {
                           // Fallback: copy text only (some browsers don't support image clipboard)
                           await navigator.clipboard.writeText(replyText);
@@ -1396,9 +1427,15 @@ export function EditorView() {
                         setTimeout(() => setCopied(false), 3000);
                       } catch (err) {
                         console.error("Copy failed:", err);
-                        alert(
-                          "Copy failed. Try downloading the image instead.",
-                        );
+                        // Last resort: download the watermarked image
+                        try {
+                          const link = document.createElement("a");
+                          link.href = watermarkedUrl;
+                          link.download = `fixtral-watermarked-${Date.now()}.png`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        } catch {}
                       }
                     }}
                     className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold"
@@ -1415,9 +1452,23 @@ export function EditorView() {
                       </>
                     )}
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() =>
+                      handleDownload(
+                        watermarkedUrl,
+                        `fixtral-watermarked-${Date.now()}.png`,
+                      )
+                    }
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Watermarked Image
+                  </Button>
                   <p className="text-[10px] text-muted-foreground text-center">
-                    Copies the watermarked image + reply text to clipboard.
-                    Paste into Reddit.
+                    Copies the watermarked image to clipboard. Download if copy
+                    doesn&apos;t work on your device.
                   </p>
                 </CardContent>
               </Card>

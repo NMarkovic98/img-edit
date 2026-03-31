@@ -266,6 +266,7 @@ async function checkReddit(env: Env) {
         body,
         tag: "fixtral-paid",
         url: "/app",
+        postId: paidPosts[0]?.id,
       });
     }
 
@@ -283,6 +284,7 @@ async function checkReddit(env: Env) {
         body,
         tag: "fixtral-free",
         url: "/app",
+        postId: freePosts[0]?.id,
       });
     }
 

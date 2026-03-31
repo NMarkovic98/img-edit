@@ -16,6 +16,7 @@ import {
   VolumeX,
   LogOut,
   Radio,
+  Info,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("queue");
   const [pendingEditorItems, setPendingEditorItems] = useState(0);
   const [redditUser, setRedditUser] = useState("");
+  const [showIconInfo, setShowIconInfo] = useState(false);
   const {
     isSubscribed,
     isSupported,
@@ -44,6 +46,12 @@ export default function Dashboard() {
       return;
     }
     setRedditUser(user);
+
+    // If opened from notification with ?post= param, ensure queue tab is active
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("post")) {
+      setActiveTab("queue");
+    }
   }, [router]);
 
   useEffect(() => {
@@ -71,18 +79,6 @@ export default function Dashboard() {
   }, []);
 
   const handleTabChange = (tab: string) => {
-    if (tab !== "editor" && pendingEditorItems > 0) {
-      const confirmChange = confirm(
-        `You have ${pendingEditorItems} item(s) ready for editing. Switch to Editor?`,
-      );
-      if (confirmChange) {
-        setActiveTab("editor");
-        return;
-      } else {
-        localStorage.removeItem("pendingEditorItem");
-        setPendingEditorItems(0);
-      }
-    }
     setActiveTab(tab);
   };
 
@@ -172,6 +168,39 @@ export default function Dashboard() {
                   )}
                 </Button>
                 <ThemeToggle />
+                <div className="relative sm:hidden">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowIconInfo(!showIconInfo)}
+                    className="touch-target h-9 w-9 p-0"
+                    title="What do these icons mean?"
+                  >
+                    <Info className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                  {showIconInfo && (
+                    <div className="absolute right-0 top-10 z-50 w-56 rounded-lg border bg-popover p-3 shadow-lg text-xs space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Bell className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                        <span>Push notifications on/off</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Volume2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                        <span>Sound notifications on/off</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Radio className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                        <span>Background monitor (push when tab closed)</span>
+                      </div>
+                      <button
+                        onClick={() => setShowIconInfo(false)}
+                        className="text-muted-foreground hover:text-foreground text-[10px] pt-1"
+                      >
+                        Tap to close
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -215,13 +244,13 @@ export default function Dashboard() {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="queue" className="mt-3 sm:mt-4">
+            <div className={`mt-3 sm:mt-4 ${activeTab === "queue" ? "" : "hidden"}`}>
               <QueueView />
-            </TabsContent>
+            </div>
 
-            <TabsContent value="editor" className="mt-3 sm:mt-4">
+            <div className={`mt-3 sm:mt-4 ${activeTab === "editor" ? "" : "hidden"}`}>
               <EditorView />
-            </TabsContent>
+            </div>
           </Tabs>
         </main>
       </div>
