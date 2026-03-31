@@ -135,145 +135,243 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
   };
 }
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/&nbsp;/g, " ");
-}
+// In-memory cache to avoid hammering Reddit
+// NOTE: On serverless (Vercel) this cache is per-instance, so we use a generous TTL
+// and also leverage Next.js fetch cache as a secondary layer.
+let postsCache: { posts: any[]; timestamp: number } = {
+  posts: [],
+  timestamp: 0,
+};
+const CACHE_TTL_MS = 55000; // 55 seconds — keep cache alive longer to survive across rapid requests
 
-// Parse a single RSS <entry> into a post object
-function parseRSSEntry(entry: string, subreddit: string) {
-  const get = (tag: string) => {
-    const m = entry.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
-    return m ? m[1].trim() : "";
-  };
-
-  const title = decodeEntities(get("title"));
-  const link = entry.match(/<link[^>]*href="([^"]*)"[^>]*\/?>/)?.[1] || "";
-  const id = link.match(/comments\/([a-z0-9]+)\//)?.[1] || "";
-  const updated = get("updated");
-  const author = entry.match(/<name>\/u\/([^<]*)<\/name>/)?.[1] || "";
-  const category = entry.match(/<category[^>]*term="([^"]*)"[^>]*\/?>/)?.[1] || subreddit;
-
-  // Content is HTML-entity encoded inside <content> — decode it to parse HTML
-  const rawContent = get("content");
-  const html = decodeEntities(rawContent);
-
-  const created_utc = updated ? new Date(updated).getTime() / 1000 : 0;
-
-  // Extract i.redd.it links first (full resolution), then fall back to preview thumbnails
-  const images: string[] = [];
-
-  // 1. Direct i.redd.it links from [link] anchors (best quality)
-  const directLinkRegex = /href="(https?:\/\/i\.redd\.it\/[^"]+)"/g;
-  let m;
-  while ((m = directLinkRegex.exec(html)) !== null) {
-    const url = m[1].replace(/&amp;/g, "&");
-    if (!images.includes(url)) images.push(url);
+// Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
+async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]) {
+  // Return cached data if fresh enough
+  const now = Date.now();
+  if (
+    postsCache.posts.length > 0 &&
+    now - postsCache.timestamp < CACHE_TTL_MS
+  ) {
+    console.log(
+      `Returning cached posts (${postsCache.posts.length} posts, ${Math.round((now - postsCache.timestamp) / 1000)}s old)`,
+    );
+    // Still filter by selected subreddits from the cache
+    const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
+    const filtered = postsCache.posts.filter((p: any) =>
+      subSet.has((p.subreddit || "").toLowerCase()),
+    );
+    return processRawPosts(filtered);
   }
 
-  // 2. <img> tags — convert preview.redd.it to i.redd.it
-  const imgRegex = /<img[^>]*src="([^"]*)"[^>]*>/g;
-  while ((m = imgRegex.exec(html)) !== null) {
-    let src = m[1].replace(/&amp;/g, "&");
-    const previewMatch = src.match(/preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/);
-    if (previewMatch) {
-      src = `https://i.redd.it/${previewMatch[1]}.${previewMatch[2]}`;
-    }
-    if (!images.includes(src) && (src.includes("i.redd.it") || src.includes("i.imgur.com"))) {
-      images.push(src);
-    }
-  }
-
-  // 3. media:thumbnail as last resort
-  if (images.length === 0) {
-    const thumbMatch = entry.match(/<media:thumbnail[^>]*url="([^"]*)"[^>]*\/?>/);
-    if (thumbMatch) {
-      let src = decodeEntities(thumbMatch[1]);
-      const previewMatch = src.match(/preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/);
-      if (previewMatch) {
-        src = `https://i.redd.it/${previewMatch[1]}.${previewMatch[2]}`;
-      }
-      images.push(src);
-    }
-  }
-
-  // Extract description (strip HTML tags)
-  const description = html
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const isPaid = title.toLowerCase().includes("[paid]") || description.toLowerCase().includes("will tip") || description.toLowerCase().includes("$");
-
-  if (images.length === 0 || !id) return null;
-
-  return {
-    id,
-    title,
-    description: description || title,
-    imageUrl: images[0],
-    allImages: images,
-    isGallery: images.length > 1,
-    imageCount: images.length,
-    postUrl: link,
-    created_utc,
-    created_date: new Date(created_utc * 1000).toISOString(),
-    author,
-    score: 0,
-    num_comments: 0,
-    subreddit: category,
-    thumbnail: images[0],
-    upvote_ratio: 0,
-    flair: null,
-    isPaid,
-  };
-}
-
-// Fetch posts via Reddit RSS feed (less aggressive rate limiting than JSON API)
-async function fetchPostsViaRSS(
-  subreddits: string[] = ["PhotoshopRequest"],
-) {
   const multiSub = subreddits.join("+");
-  console.log(`Fetching RSS: r/${multiSub}/new.rss`);
 
-  const res = await fetch(
-    `https://www.reddit.com/r/${multiSub}/new.rss?limit=100`,
-    {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        Accept: "application/atom+xml,application/xml,text/xml,*/*",
-      },
-      cache: "no-store",
-    },
-  );
+  // Try OAuth API first (600 req/10min limit vs ~100/min for public)
+  const hasRedditCredentials =
+    process.env.REDDIT_CLIENT_ID &&
+    process.env.REDDIT_CLIENT_SECRET &&
+    process.env.REDDIT_USERNAME &&
+    process.env.REDDIT_PASSWORD;
 
-  if (res.status === 429) {
-    throw new Error(`Reddit RSS rate limit — reset in ${res.headers.get("x-ratelimit-reset") || "60"}s`);
+  try {
+    let allPosts: any[];
+
+    if (hasRedditCredentials) {
+      console.log(
+        `Fetching via OAuth API: r/${multiSub}/new (${subreddits.length} subreddits)`,
+      );
+      const token = await getAccessToken();
+      const response = await redditGet(
+        `/r/${multiSub}/new?limit=100&raw_json=1`,
+        token,
+      );
+      allPosts = response.data.children.map((child: any) => child.data);
+    } else {
+      console.log(
+        `Fetching from r/${multiSub}/new.json (public API, ${subreddits.length} subreddits)`,
+      );
+      const res = await fetch(
+        `https://www.reddit.com/r/${multiSub}/new.json?limit=100&raw_json=1`,
+        {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            Connection: "keep-alive",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+          },
+          // Use Next.js fetch cache as a secondary cache layer on Vercel
+          next: { revalidate: 30 },
+        } as any,
+      );
+
+      if (res.status === 429) {
+        const resetAfter = parseInt(
+          res.headers.get("x-ratelimit-reset") || "60",
+          10,
+        );
+        console.warn(
+          `Rate limited, reset in ${resetAfter}s. Returning cached data.`,
+        );
+        if (postsCache.posts.length > 0) {
+          const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
+          const filtered = postsCache.posts.filter((p: any) =>
+            subSet.has((p.subreddit || "").toLowerCase()),
+          );
+          return processRawPosts(filtered);
+        }
+        return [];
+      }
+
+      if (!res.ok) {
+        console.error(`Reddit public API error: ${res.status}`);
+        return postsCache.posts.length > 0
+          ? processRawPosts(postsCache.posts)
+          : [];
+      }
+
+      const data = await res.json();
+      allPosts = data.data.children.map((child: any) => child.data);
+    }
+
+    // Update cache
+    postsCache = { posts: allPosts, timestamp: Date.now() };
+    console.log(`Fetched ${allPosts.length} posts from Reddit`);
+
+    return processRawPosts(allPosts);
+  } catch (err) {
+    console.error("Reddit fetch error:", err);
+    // Return stale cache on error
+    return postsCache.posts.length > 0 ? processRawPosts(postsCache.posts) : [];
   }
+}
 
-  if (!res.ok) {
-    throw new Error(`Reddit RSS error: ${res.status}`);
-  }
+function processRawPosts(allPosts: any[]) {
+  const posts = allPosts;
 
-  const xml = await res.text();
-
-  // Split into entries
-  const entries = xml.split("<entry>").slice(1); // skip the feed header
   const thirtyMinAgo = Date.now() / 1000 - 30 * 60;
 
-  const posts = entries
-    .map((entry) => parseRSSEntry(entry, subreddits[0]))
-    .filter((p): p is NonNullable<typeof p> => p !== null && p.created_utc > thirtyMinAgo);
+  function getFullResUrl(mediaId: string, metadata: any): string {
+    const mimeType = metadata?.m || "image/jpg";
+    const ext = mimeType.split("/")[1] === "png" ? "png" : "jpg";
+    return `https://i.redd.it/${mediaId}.${ext}`;
+  }
 
-  console.log(`Parsed ${posts.length} image posts from RSS (${entries.length} entries total)`);
-  return posts;
+  function extractGalleryImages(post: any): string[] {
+    const images: string[] = [];
+    if (!post.media_metadata) return images;
+
+    const orderedIds = post.gallery_data?.items
+      ? post.gallery_data.items.map((item: any) => item.media_id)
+      : Object.keys(post.media_metadata);
+
+    for (const mediaId of orderedIds) {
+      const meta = post.media_metadata[mediaId];
+      if (meta && meta.status === "valid") {
+        images.push(getFullResUrl(mediaId, meta));
+      }
+    }
+    return images;
+  }
+
+  return posts
+    .filter((post: any) => {
+      const hasImage =
+        post.url &&
+        (post.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
+          post.url.includes("i.redd.it") ||
+          post.url.includes("i.imgur.com") ||
+          post.url.includes("redditmedia") ||
+          (post.preview &&
+            post.preview.images &&
+            post.preview.images.length > 0));
+      const isGallery = post.is_gallery === true && post.media_metadata;
+      const hasSelfPostImages =
+        post.is_self &&
+        post.media_metadata &&
+        Object.keys(post.media_metadata).length > 0;
+      const isRecent = post.created_utc > thirtyMinAgo;
+      return (hasImage || isGallery || hasSelfPostImages) && isRecent;
+    })
+    .map((post: any) => {
+      let imageUrl = post.url;
+      let allImages: string[] = [];
+
+      if (
+        (post.is_gallery || (post.is_self && post.media_metadata)) &&
+        post.media_metadata
+      ) {
+        allImages = extractGalleryImages(post);
+        imageUrl = allImages[0] || post.url;
+      } else if (
+        post.crosspost_parent_list &&
+        post.crosspost_parent_list.length > 0
+      ) {
+        const originalPost = post.crosspost_parent_list[0];
+        if (originalPost.is_gallery && originalPost.media_metadata) {
+          allImages = extractGalleryImages(originalPost);
+          imageUrl = allImages[0] || originalPost.url;
+        } else if (
+          originalPost.url &&
+          (originalPost.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
+            originalPost.url.includes("i.redd.it") ||
+            originalPost.url.includes("i.imgur.com"))
+        ) {
+          imageUrl = originalPost.url;
+        }
+      } else if (
+        post.preview &&
+        post.preview.images &&
+        post.preview.images.length > 0
+      ) {
+        // Try to get original i.redd.it URL from the preview image ID
+        // preview.redd.it URLs are recompressed; i.redd.it URLs are originals
+        const previewImage = post.preview.images[0];
+        const previewUrl =
+          previewImage.source?.url?.replace(/&amp;/g, "&") || "";
+        const idMatch = previewUrl.match(
+          /preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/,
+        );
+        if (idMatch) {
+          imageUrl = `https://i.redd.it/${idMatch[1]}.${idMatch[2]}`;
+        } else if (previewImage.source?.url) {
+          imageUrl = previewUrl;
+        }
+      }
+
+      if (allImages.length === 0) {
+        allImages = [imageUrl];
+      }
+
+      const flair = (post.link_flair_text || "").toLowerCase();
+      const isPaid =
+        flair.includes("paid") || post.title.toLowerCase().includes("[paid]");
+
+      return {
+        id: post.id,
+        title: post.title,
+        description: post.selftext || post.title,
+        imageUrl,
+        allImages,
+        isGallery: allImages.length > 1,
+        imageCount: allImages.length,
+        postUrl: `https://reddit.com${post.permalink}`,
+        created_utc: post.created_utc,
+        created_date: new Date(post.created_utc * 1000).toISOString(),
+        author: post.author,
+        score: post.score,
+        num_comments: post.num_comments,
+        subreddit: post.subreddit,
+        thumbnail: post.thumbnail,
+        upvote_ratio: post.upvote_ratio,
+        flair: post.link_flair_text || null,
+        isPaid,
+      };
+    });
 }
 
 export async function GET(_req: NextRequest) {
@@ -285,7 +383,7 @@ export async function GET(_req: NextRequest) {
       ? subredditParam.split(",").map((s) => s.trim())
       : ["PhotoshopRequest"];
 
-    const posts = await fetchPostsViaRSS(subreddits);
+    const posts = await fetchPostsViaAPI(subreddits);
     posts.sort((a: any, b: any) => b.created_utc - a.created_utc);
     console.log(`Found ${posts.length} image posts`);
 
