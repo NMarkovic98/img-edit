@@ -14,6 +14,22 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
 const API_BASE = "https://oauth.reddit.com";
 
+// Route requests through Cloudflare Worker proxy when configured (avoids Vercel IP blocks)
+async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
+  const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
+  const proxySecret = process.env.CLOUDFLARE_PROXY_SECRET;
+
+  if (proxyUrl && proxySecret) {
+    const target = `${proxyUrl}?url=${encodeURIComponent(url)}`;
+    const headers = new Headers(init?.headers);
+    headers.set("X-Proxy-Secret", proxySecret);
+    console.log(`Proxying via Cloudflare: ${url.substring(0, 80)}...`);
+    return fetch(target, { ...init, headers });
+  }
+
+  return fetch(url, init);
+}
+
 async function getAccessToken() {
   const clientId = process.env.REDDIT_CLIENT_ID?.replace(/"/g, "").trim();
   const clientSecret = process.env.REDDIT_CLIENT_SECRET?.replace(
@@ -49,7 +65,7 @@ async function getAccessToken() {
     "User-Agent": userAgent,
   };
 
-  const res = await fetch(TOKEN_URL, { method: "POST", headers, body });
+  const res = await proxyFetch(TOKEN_URL, { method: "POST", headers, body });
 
   if (!res.ok) {
     const text = await res.text();
@@ -69,7 +85,7 @@ async function redditGet(path: string, token: string) {
     process.env.REDDIT_USER_AGENT ||
     "windows:com.varnan.wsbmcp:v1.0.0 (by /u/Ok-Literature-9189)";
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await proxyFetch(`${API_BASE}${path}`, {
     headers: {
       Authorization: `bearer ${token}`,
       "User-Agent": userAgent,
@@ -189,7 +205,7 @@ async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]) {
       console.log(
         `Fetching from r/${multiSub}/new.json (public API, ${subreddits.length} subreddits)`,
       );
-      const res = await fetch(
+      const res = await proxyFetch(
         `https://www.reddit.com/r/${multiSub}/new.json?limit=100&raw_json=1`,
         {
           headers: {
