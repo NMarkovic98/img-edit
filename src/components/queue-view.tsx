@@ -424,22 +424,20 @@ export function QueueView() {
             return true;
           });
 
-          // Sort: paid from high-value subreddits first, then other paid, then by time
+          // Sort: newest first, paid posts get a 30-min boost, high-value paid get 1hr boost
           const HIGH_VALUE_SUBS = new Set(["editmyphoto", "photoshoprequests"]);
+          const PAID_BOOST = 30 * 60; // 30 minutes in seconds
+          const HIGH_PAID_BOOST = 60 * 60; // 1 hour in seconds
           fetchedPosts.sort((a, b) => {
-            const aHighPaid =
-              a.isPaid && HIGH_VALUE_SUBS.has(a.subreddit.toLowerCase())
-                ? 1
-                : 0;
-            const bHighPaid =
-              b.isPaid && HIGH_VALUE_SUBS.has(b.subreddit.toLowerCase())
-                ? 1
-                : 0;
-            if (aHighPaid !== bHighPaid) return bHighPaid - aHighPaid;
-            const aPaid = a.isPaid ? 1 : 0;
-            const bPaid = b.isPaid ? 1 : 0;
-            if (aPaid !== bPaid) return bPaid - aPaid;
-            return b.created_utc - a.created_utc;
+            let aTime = a.created_utc;
+            let bTime = b.created_utc;
+            if (a.isPaid) aTime += PAID_BOOST;
+            if (b.isPaid) bTime += PAID_BOOST;
+            if (a.isPaid && HIGH_VALUE_SUBS.has(a.subreddit.toLowerCase()))
+              aTime += HIGH_PAID_BOOST;
+            if (b.isPaid && HIGH_VALUE_SUBS.has(b.subreddit.toLowerCase()))
+              bTime += HIGH_PAID_BOOST;
+            return bTime - aTime;
           });
 
           setPosts(fetchedPosts);

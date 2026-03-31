@@ -18,7 +18,7 @@ const KEY_PUSH_SUBS = "monitor:pushSubscriptions";
 const SUBREDDITS = [
   "PhotoshopRequest",
   "PhotoshopRequests",
-  "estoration",
+  "restoration",
   "editmyphoto",
 ];
 
@@ -120,6 +120,33 @@ export default {
       return json({ ok: true, totalSubscriptions: subs.length }, corsHeaders);
     }
 
+    // POST /test-push — send a test push notification to debug
+    if (url.pathname === "/test-push" && request.method === "POST") {
+      const subs = await getPushSubscriptions(env);
+      if (subs.length === 0) {
+        return json(
+          { ok: false, error: "No subscriptions" },
+          corsHeaders,
+          400,
+        );
+      }
+      try {
+        await sendPushToAll(subs, env, {
+          title: "Test Push",
+          body: "If you see this, push notifications work!",
+          tag: "fixtral-test",
+          url: "/app",
+        });
+        return json({ ok: true, sentTo: subs.length }, corsHeaders);
+      } catch (err: any) {
+        return json(
+          { ok: false, error: err.message },
+          corsHeaders,
+          500,
+        );
+      }
+    }
+
     return json({ error: "Not found" }, corsHeaders, 404);
   },
 };
@@ -168,7 +195,8 @@ async function checkReddit(env: Env) {
     });
 
     if (!res.ok) {
-      console.error(`Reddit fetch failed: ${res.status}`);
+      const body = await res.text();
+      console.error(`Reddit fetch failed: ${res.status} — ${body.substring(0, 200)}`);
       return;
     }
 
@@ -268,14 +296,26 @@ async function checkReddit(env: Env) {
 // ─── Web Push (RFC 8291) implementation for Cloudflare Workers ───────
 
 async function sendPushToAll(subs: any[], env: Env, payload: any) {
+  console.log(`Sending push to ${subs.length} subscriber(s):`, JSON.stringify(payload));
   const results = await Promise.allSettled(
     subs.map((sub) => sendWebPush(sub, env, payload)),
   );
 
-  // Remove dead subscriptions (410 Gone / 404)
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      console.log(`Push to sub ${i} succeeded`);
+    } else {
+      console.error(`Push to sub ${i} failed:`, result.reason?.message || result.reason);
+    }
+  });
+
+  // Remove dead subscriptions (410 Gone / 404 only — not transient errors)
   const deadEndpoints: string[] = [];
   results.forEach((result, i) => {
-    if (result.status === "rejected" && result.reason?.statusCode >= 400) {
+    if (
+      result.status === "rejected" &&
+      (result.reason?.statusCode === 404 || result.reason?.statusCode === 410)
+    ) {
       deadEndpoints.push(subs[i].endpoint);
     }
   });
@@ -462,7 +502,7 @@ async function encryptPayload(
 
   // Build aes128gcm header: salt(16) + rs(4) + idLen(1) + keyId(65) + ciphertext
   const recordSize = new ArrayBuffer(4);
-  new DataView(recordSize).setUint32(0, paddedPayload.length + 16 + 1); // +16 for tag, +1 for padding
+  new DataView(recordSize).setUint32(0, paddedPayload.length + 16); // +16 for AES-GCM auth tag
 
   const header = concatBytes(
     salt,
@@ -480,25 +520,7 @@ async function hkdfDerive(
   info: Uint8Array,
   length: number,
 ): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    ikm,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const prk = new Uint8Array(await crypto.subtle.sign("HMAC", key, salt));
-
-  // Rederive with HKDF-Expand — actually we need proper HKDF
-  const prkKey = await crypto.subtle.importKey(
-    "raw",
-    prk,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
-  // HKDF-Extract then Expand
+  // HKDF-Extract: PRK = HMAC-SHA256(salt, IKM)
   const extractKey = await crypto.subtle.importKey(
     "raw",
     salt,
@@ -506,13 +528,14 @@ async function hkdfDerive(
     false,
     ["sign"],
   );
-  const prkCorrect = new Uint8Array(
+  const prk = new Uint8Array(
     await crypto.subtle.sign("HMAC", extractKey, ikm),
   );
 
+  // HKDF-Expand: T(1) = HMAC-SHA256(PRK, info || 0x01)
   const expandKey = await crypto.subtle.importKey(
     "raw",
-    prkCorrect,
+    prk,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
