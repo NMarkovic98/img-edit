@@ -185,10 +185,9 @@ async function checkReddit(env: Env) {
     const multiSub = SUBREDDITS.join("+");
     const redditUrl = `https://www.reddit.com/r/${multiSub}/new.json?limit=50&raw_json=1`;
 
-    const proxyTarget = `${env.REDDIT_PROXY_URL}?url=${encodeURIComponent(redditUrl)}`;
-    const res = await fetch(proxyTarget, {
+    // Fetch Reddit directly (no proxy needed — CF Workers aren't IP-blocked like Vercel)
+    const res = await fetch(redditUrl, {
       headers: {
-        "X-Proxy-Secret": env.PROXY_SECRET,
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
       },
