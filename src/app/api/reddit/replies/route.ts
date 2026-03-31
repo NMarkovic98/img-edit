@@ -4,15 +4,28 @@ export const runtime = "nodejs";
 import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-];
+// Route requests through Cloudflare Worker proxy when configured (avoids Vercel IP blocks)
+async function proxyFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
+  const proxySecret = process.env.CLOUDFLARE_PROXY_SECRET;
+
+  if (proxyUrl && proxySecret) {
+    const target = `${proxyUrl}?url=${encodeURIComponent(url)}`;
+    const headers = new Headers(init?.headers);
+    headers.set("X-Proxy-Secret", proxySecret);
+    return fetch(target, { ...init, headers });
+  }
+
+  return fetch(url, init);
+}
 
 async function redditFetch(url: string) {
-  const res = await fetch(url, {
+  const res = await proxyFetch(url, {
     headers: {
-      "User-Agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       "Accept-Encoding": "gzip, deflate, br",
