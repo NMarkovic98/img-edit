@@ -295,7 +295,10 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
       ctx.drawImage(img, 0, 0);
 
       // Watermark settings — scale text relative to image size
-      const fontSize = Math.max(14, Math.floor(Math.min(canvas.width, canvas.height) * 0.025));
+      const fontSize = Math.max(
+        14,
+        Math.floor(Math.min(canvas.width, canvas.height) * 0.025),
+      );
       ctx.font = `bold ${fontSize}px sans-serif`;
       const text = "Fixtral — Preview";
 
@@ -550,7 +553,8 @@ export function EditorView() {
         setEditResult(editResult);
 
         // Generate watermarked preview
-        const imgSrc = editResult.generatedImages?.[0] || editResult.editedContent;
+        const imgSrc =
+          editResult.generatedImages?.[0] || editResult.editedContent;
         if (imgSrc) generateWatermark(imgSrc);
       } else {
         console.error("Edit failed:", result.error);
@@ -618,7 +622,10 @@ export function EditorView() {
         setCurrentItem(null);
         setEditResult(null);
         setEditPrompt("");
-        if (watermarkedUrl) { URL.revokeObjectURL(watermarkedUrl); setWatermarkedUrl(null); }
+        if (watermarkedUrl) {
+          URL.revokeObjectURL(watermarkedUrl);
+          setWatermarkedUrl(null);
+        }
 
         localStorage.removeItem("pendingEditorItem");
         window.dispatchEvent(
@@ -653,14 +660,18 @@ export function EditorView() {
           link.click();
           document.body.removeChild(link);
 
-          alert("Manual download initiated! The image generation was successful.");
+          alert(
+            "Manual download initiated! The image generation was successful.",
+          );
           return;
         }
       } catch (downloadError) {
         console.error("Even manual download failed:", downloadError);
       }
 
-      alert("Unable to save. Image generation was successful, but all save methods failed.");
+      alert(
+        "Unable to save. Image generation was successful, but all save methods failed.",
+      );
     }
   };
 
@@ -675,7 +686,6 @@ export function EditorView() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 px-2 sm:px-0">
-
       {/* Current Item Display */}
       {currentItem ? (
         <div className="space-y-6">
@@ -1155,7 +1165,7 @@ export function EditorView() {
                             alt={`AI-generated edited image ${index + 1}`}
                             fill
                             className="object-cover"
-                            unoptimized={imageUrl?.startsWith("data:")}
+                            unoptimized
                           />
                         </div>
                       ))}
@@ -1170,8 +1180,12 @@ export function EditorView() {
                     <div
                       className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
                       onClick={() => {
-                        const imgSrc = editResult.editedContent.includes("data:image")
-                          ? editResult.editedContent.match(/data:image[^"']+/)?.[0] || ""
+                        const imgSrc = editResult.editedContent.includes(
+                          "data:image",
+                        )
+                          ? editResult.editedContent.match(
+                              /data:image[^"']+/,
+                            )?.[0] || ""
                           : editResult.editedContent;
                         showImage(imgSrc, "AI Edited Image", imgSrc);
                       }}
@@ -1179,7 +1193,9 @@ export function EditorView() {
                       <Image
                         src={
                           editResult.editedContent.includes("data:image")
-                            ? editResult.editedContent.match(/data:image[^"']+/)?.[0] || ""
+                            ? editResult.editedContent.match(
+                                /data:image[^"']+/,
+                              )?.[0] || ""
                             : editResult.editedContent
                         }
                         alt="AI-generated edited image"
@@ -1265,6 +1281,7 @@ export function EditorView() {
                     alt="Comparison image"
                     fill
                     className="object-cover"
+                    unoptimized={!showOriginal}
                   />
                 </div>
               </div>
@@ -1314,13 +1331,20 @@ export function EditorView() {
                     Watermarked Preview for Reddit Reply
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    Full resolution with watermark overlay. Use the button below to copy it with your reply text.
+                    Full resolution with watermark overlay. Use the button below
+                    to copy it with your reply text.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div
                     className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() => showImage(watermarkedUrl, "Watermarked Preview", watermarkedUrl)}
+                    onClick={() =>
+                      showImage(
+                        watermarkedUrl,
+                        "Watermarked Preview",
+                        watermarkedUrl,
+                      )
+                    }
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -1333,7 +1357,8 @@ export function EditorView() {
                     onClick={async () => {
                       try {
                         setCopied(false);
-                        const paypalLink = localStorage.getItem("paypal_link") || "";
+                        const paypalLink =
+                          localStorage.getItem("paypal_link") || "";
                         const tipLine = paypalLink
                           ? `A tip is appreciated: ${paypalLink}`
                           : "";
@@ -1346,15 +1371,21 @@ export function EditorView() {
                           .filter(Boolean)
                           .join("\n");
 
-                        // Try to copy image + text to clipboard
-                        const blob = await createWatermarkedBlob(
-                          editResult.generatedImages?.[0] || editResult.editedContent,
-                        );
+                        // Use the already-generated watermarked blob URL to avoid CORS issues
+                        const res = await fetch(watermarkedUrl);
+                        const blob = await res.blob();
+                        // Re-encode as PNG if needed
+                        const pngBlob =
+                          blob.type === "image/png"
+                            ? blob
+                            : new Blob([blob], { type: "image/png" });
                         try {
                           await navigator.clipboard.write([
                             new ClipboardItem({
-                              "image/png": blob,
-                              "text/plain": new Blob([replyText], { type: "text/plain" }),
+                              "image/png": pngBlob,
+                              "text/plain": new Blob([replyText], {
+                                type: "text/plain",
+                              }),
                             }),
                           ]);
                         } catch {
@@ -1365,7 +1396,9 @@ export function EditorView() {
                         setTimeout(() => setCopied(false), 3000);
                       } catch (err) {
                         console.error("Copy failed:", err);
-                        alert("Copy failed. Try downloading the image instead.");
+                        alert(
+                          "Copy failed. Try downloading the image instead.",
+                        );
                       }
                     }}
                     className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold"
@@ -1383,7 +1416,8 @@ export function EditorView() {
                     )}
                   </Button>
                   <p className="text-[10px] text-muted-foreground text-center">
-                    Copies the watermarked image + reply text to clipboard. Paste into Reddit.
+                    Copies the watermarked image + reply text to clipboard.
+                    Paste into Reddit.
                   </p>
                 </CardContent>
               </Card>

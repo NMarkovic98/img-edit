@@ -7,7 +7,15 @@ import { QueueView } from "@/components/queue-view";
 import { EditorView } from "@/components/editor-view";
 import { ImageViewerProvider } from "@/components/image-viewer";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Wand2, Image, Bell, BellOff, LogOut } from "lucide-react";
+import {
+  Wand2,
+  Image,
+  Bell,
+  BellOff,
+  Volume2,
+  VolumeX,
+  LogOut,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
 
@@ -15,8 +23,14 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("queue");
   const [pendingEditorItems, setPendingEditorItems] = useState(0);
   const [redditUser, setRedditUser] = useState("");
-  const { isSubscribed, isSupported, subscribe, unsubscribe } =
-    usePushNotifications();
+  const {
+    isSubscribed,
+    isSupported,
+    isMuted,
+    subscribe,
+    unsubscribe,
+    toggleMute,
+  } = usePushNotifications();
   const router = useRouter();
 
   useEffect(() => {
@@ -119,6 +133,23 @@ export default function Dashboard() {
                     )}
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleMute}
+                  className="touch-target relative h-9 w-9 p-0"
+                  title={
+                    isMuted
+                      ? "Unmute notifications (chime & speech)"
+                      : "Mute notifications (chime & speech)"
+                  }
+                >
+                  {isMuted ? (
+                    <VolumeX className="h-4 w-4 text-red-500" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 text-green-500" />
+                  )}
+                </Button>
                 <ThemeToggle />
                 <Button
                   variant="ghost"

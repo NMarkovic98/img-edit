@@ -28,15 +28,19 @@ function getRedditUsername(): string {
 interface PushState {
   isSubscribed: boolean;
   isSupported: boolean;
+  isMuted: boolean;
   subscribe: () => Promise<void>;
   unsubscribe: () => Promise<void>;
+  toggleMute: () => void;
 }
 
 const PushContext = createContext<PushState>({
   isSubscribed: false,
   isSupported: false,
+  isMuted: false,
   subscribe: async () => {},
   unsubscribe: async () => {},
+  toggleMute: () => {},
 });
 
 export const usePushNotifications = () => useContext(PushContext);
@@ -195,12 +199,26 @@ export function NotificationProvider({
   const isFirstLoad = useRef(true);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
   const swRegistration = useRef<ServiceWorkerRegistration | null>(null);
 
-  // Load persisted IDs on mount
+  // Load persisted IDs and mute state on mount
   useEffect(() => {
     seenPostIds.current = getSeenPostIds();
     seenReplyIds.current = getSeenReplyIds();
+    const muted = localStorage.getItem("notificationsMuted") === "true";
+    setIsMuted(muted);
+    isMutedRef.current = muted;
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      isMutedRef.current = next;
+      localStorage.setItem("notificationsMuted", String(next));
+      return next;
+    });
   }, []);
 
   // ─── Service Worker & Push Registration ─────────────────────────
@@ -354,10 +372,12 @@ export function NotificationProvider({
         // PAID gets urgent notification
         if (paidPosts.length > 0) {
           const msg = buildMessage(paidPosts);
-          notify(
-            `${paidPosts.length} PAID request${paidPosts.length > 1 ? "s" : ""}: ${msg}`,
-            "paid",
-          );
+          if (!isMutedRef.current) {
+            notify(
+              `${paidPosts.length} PAID request${paidPosts.length > 1 ? "s" : ""}: ${msg}`,
+              "paid",
+            );
+          }
 
           sendPushNotification(
             `PAID: ${paidPosts.length} new request${paidPosts.length > 1 ? "s" : ""}`,
@@ -375,7 +395,7 @@ export function NotificationProvider({
         // FREE gets subtle notification (only if no paid, otherwise skip voice)
         if (freePosts.length > 0) {
           const msg = buildMessage(freePosts);
-          if (paidPosts.length === 0) {
+          if (paidPosts.length === 0 && !isMutedRef.current) {
             notify(
               `${freePosts.length} free request${freePosts.length > 1 ? "s" : ""}: ${msg}`,
               "free",
@@ -445,7 +465,7 @@ export function NotificationProvider({
           );
         }
 
-        if (parts.length > 0) {
+        if (parts.length > 0 && !isMutedRef.current) {
           notify(parts.join(". "), "reply");
         }
 
@@ -479,8 +499,10 @@ export function NotificationProvider({
       value={{
         isSubscribed,
         isSupported,
+        isMuted,
         subscribe: subscribeToPush,
         unsubscribe: unsubscribeFromPush,
+        toggleMute,
       }}
     >
       {children}

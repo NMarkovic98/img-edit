@@ -395,9 +395,15 @@ export async function GET(_req: NextRequest) {
   try {
     const url = new URL(_req.url);
     const subredditParam = url.searchParams.get("subreddits");
+    const noCache = url.searchParams.get("noCache") === "1";
     const subreddits = subredditParam
       ? subredditParam.split(",").map((s) => s.trim())
       : ["PhotoshopRequest"];
+
+    // Bust server-side cache when user explicitly clicks Refresh
+    if (noCache) {
+      postsCache = { posts: [], timestamp: 0 };
+    }
 
     const posts = await fetchPostsViaAPI(subreddits);
     posts.sort((a: any, b: any) => b.created_utc - a.created_utc);

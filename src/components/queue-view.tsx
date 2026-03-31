@@ -101,37 +101,77 @@ interface ModelOption {
 
 function getModelOptions(w: number, h: number): ModelOption[] {
   const max = Math.max(w, h);
+  const megapixels = Math.ceil((w * h) / 1_000_000);
+  // FLUX 2 Pro: $0.03 first MP + $0.015 per extra MP (rounded up)
+  const fluxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(2);
+
   if (max >= 4097) {
     return [
-      { id: "flux-2-pro", name: "FLUX 2 Pro", price: "$0.14", tier: "4K+" },
-      { id: "nano-banana-4k", name: "Nano Banana Pro 4K", price: "$0.16", tier: "4K+" },
+      {
+        id: "flux-2-pro",
+        name: "FLUX 2 Pro",
+        price: `~$${fluxPrice}`,
+        tier: "4K+",
+      },
+      {
+        id: "nano-banana-4k",
+        name: "Nano Banana Pro 4K",
+        price: "$0.30",
+        tier: "4K+",
+      },
     ];
   }
   if (max >= 2560) {
     return [
       { id: "seedream-4k", name: "Seedream v4.5", price: "$0.04", tier: "2K" },
-      { id: "nano-banana-4k", name: "Nano Banana Pro 4K", price: "$0.16", tier: "2K" },
+      {
+        id: "nano-banana-4k",
+        name: "Nano Banana Pro 4K",
+        price: "$0.30",
+        tier: "2K",
+      },
     ];
   }
   if (max >= 1920) {
     return [
       { id: "seedream-2k", name: "Seedream v4.5", price: "$0.04", tier: "FHD" },
-      { id: "nano-banana-2k", name: "Nano Banana Pro 2K", price: "$0.12", tier: "FHD" },
+      {
+        id: "nano-banana-2k",
+        name: "Nano Banana Pro 2K",
+        price: "$0.15",
+        tier: "FHD",
+      },
     ];
   }
   if (max >= 1280) {
     return [
-      { id: "nano-banana-2k", name: "Nano Banana Pro 2K", price: "$0.12", tier: "HD" },
+      {
+        id: "nano-banana-2k",
+        name: "Nano Banana Pro 2K",
+        price: "$0.15",
+        tier: "HD",
+      },
     ];
   }
   return [
-    { id: "gpt-image", name: "GPT Image 1.5", price: "$0.17", tier: "SD" },
-    { id: "nano-banana-1k", name: "Nano Banana Pro 1K", price: "$0.08", tier: "SD" },
+    { id: "gpt-image", name: "GPT Image 1.5", price: "~$0.20", tier: "SD" },
+    {
+      id: "nano-banana-1k",
+      name: "Nano Banana Pro 1K",
+      price: "$0.15",
+      tier: "SD",
+    },
   ];
 }
 
 // Resolution badge — loads image natively to read naturalWidth × naturalHeight
-function ResolutionBadge({ src, onDims }: { src: string; onDims?: (w: number, h: number) => void }) {
+function ResolutionBadge({
+  src,
+  onDims,
+}: {
+  src: string;
+  onDims?: (w: number, h: number) => void;
+}) {
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
@@ -166,7 +206,9 @@ function ResolutionBadge({ src, onDims }: { src: string; onDims?: (w: number, h:
   }
 
   return (
-    <div className={`absolute bottom-1.5 left-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}>
+    <div
+      className={`absolute bottom-1.5 left-1.5 ${color} text-white text-[9px] font-bold px-1.5 py-0.5 rounded leading-none z-10`}
+    >
       {dims.w}×{dims.h} {label}
     </div>
   );
@@ -181,7 +223,12 @@ function ImageSlider({
 }: {
   images: string[];
   postUrl: string;
-  showImage: (src: string, title: string, downloadUrl: string, postUrl: string) => void;
+  showImage: (
+    src: string,
+    title: string,
+    downloadUrl: string,
+    postUrl: string,
+  ) => void;
   onDims?: (w: number, h: number) => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -195,7 +242,7 @@ function ImageSlider({
   return (
     <div className="relative">
       <div
-        className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer"
+        className="relative aspect-[3/2] sm:aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer"
         onClick={() =>
           showImage(
             images[currentIndex],
@@ -211,17 +258,26 @@ function ImageSlider({
           fill
           className="object-contain bg-black/5"
         />
-        <ResolutionBadge src={images[currentIndex]} onDims={currentIndex === 0 ? onDims : undefined} />
+        <ResolutionBadge
+          src={images[currentIndex]}
+          onDims={currentIndex === 0 ? onDims : undefined}
+        />
       </div>
       {/* Navigation arrows */}
       <button
-        onClick={(e) => { e.stopPropagation(); goTo(currentIndex - 1); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          goTo(currentIndex - 1);
+        }}
         className="absolute left-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 transition-colors"
       >
         <ChevronLeft className="h-4 w-4" />
       </button>
       <button
-        onClick={(e) => { e.stopPropagation(); goTo(currentIndex + 1); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          goTo(currentIndex + 1);
+        }}
         className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 transition-colors"
       >
         <ChevronRight className="h-4 w-4" />
@@ -231,7 +287,10 @@ function ImageSlider({
         {images.map((_, idx) => (
           <button
             key={idx}
-            onClick={(e) => { e.stopPropagation(); setCurrentIndex(idx); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setCurrentIndex(idx);
+            }}
             className={`w-1.5 h-1.5 rounded-full transition-colors ${idx === currentIndex ? "bg-white" : "bg-white/50"}`}
           />
         ))}
@@ -264,7 +323,9 @@ export function QueueView() {
     new Set(),
   );
   // Per-post image dimensions and selected model
-  const [postDims, setPostDims] = useState<Record<string, { w: number; h: number }>>({});
+  const [postDims, setPostDims] = useState<
+    Record<string, { w: number; h: number }>
+  >({});
   const [postModel, setPostModel] = useState<Record<string, string>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
@@ -274,6 +335,16 @@ export function QueueView() {
     const timer = setInterval(() => setTick((t) => t + 1), 30000);
     return () => clearInterval(timer);
   }, []);
+
+  // Auto-clear NEW badges after 30 seconds so already-seen posts don't stay highlighted
+  useEffect(() => {
+    if (newPostIds.size === 0) return;
+    const timer = setTimeout(() => {
+      setNewPostIds(new Set());
+      setNewPostCount(0);
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [newPostIds]);
 
   // Listen for global notification events from NotificationProvider
   useEffect(() => {
@@ -317,12 +388,13 @@ export function QueueView() {
 
   // Fetch Reddit posts (notifications are handled globally by NotificationProvider)
   const fetchPosts = useCallback(
-    async (silent = false) => {
+    async (silent = false, noCache = false) => {
       if (!silent) setLoading(true);
       try {
         const subredditsParam = selectedSubreddits.join(",");
+        const cacheBust = noCache ? "&noCache=1" : "";
         const response = await authedFetch(
-          `/api/reddit/posts?subreddits=${subredditsParam}`,
+          `/api/reddit/posts?subreddits=${subredditsParam}${cacheBust}`,
         );
         const data = await response.json();
 
@@ -343,6 +415,24 @@ export function QueueView() {
             if (seen.has(p.id)) return false;
             seen.add(p.id);
             return true;
+          });
+
+          // Sort: paid from high-value subreddits first, then other paid, then by time
+          const HIGH_VALUE_SUBS = new Set(["editmyphoto", "photoshoprequests"]);
+          fetchedPosts.sort((a, b) => {
+            const aHighPaid =
+              a.isPaid && HIGH_VALUE_SUBS.has(a.subreddit.toLowerCase())
+                ? 1
+                : 0;
+            const bHighPaid =
+              b.isPaid && HIGH_VALUE_SUBS.has(b.subreddit.toLowerCase())
+                ? 1
+                : 0;
+            if (aHighPaid !== bHighPaid) return bHighPaid - aHighPaid;
+            const aPaid = a.isPaid ? 1 : 0;
+            const bPaid = b.isPaid ? 1 : 0;
+            if (aPaid !== bPaid) return bPaid - aPaid;
+            return b.created_utc - a.created_utc;
           });
 
           setPosts(fetchedPosts);
@@ -672,7 +762,7 @@ export function QueueView() {
               {autoRefresh ? "Auto" : "Auto"}
             </Button>
             <Button
-              onClick={() => fetchPosts()}
+              onClick={() => fetchPosts(false, true)}
               disabled={loading}
               size="sm"
               className="h-8 px-2.5 text-xs"
@@ -716,7 +806,7 @@ export function QueueView() {
           </div>
         )}
 
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 sm:gap-6 md:grid-cols-2 lg:grid-cols-3">
           {posts
             .filter((post) => {
               if (filterPaid === "paid") return post.isPaid;
@@ -744,13 +834,13 @@ export function QueueView() {
                       </Badge>
                     )}
                   </div>
-                  <CardHeader className="pb-3">
+                  <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6 pt-3 sm:pt-6">
                     <div className="flex items-start justify-between">
-                      <div className="space-y-2 flex-1 pr-12">
-                        <CardTitle className="text-lg leading-tight line-clamp-2">
+                      <div className="space-y-1.5 sm:space-y-2 flex-1 pr-12">
+                        <CardTitle className="text-sm sm:text-lg leading-tight line-clamp-2">
                           {post.title}
                         </CardTitle>
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs">
                           <Badge
                             variant="outline"
                             className="text-[10px] px-1.5 py-0"
@@ -801,17 +891,22 @@ export function QueueView() {
                     </div>
                   </CardHeader>
 
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-2 sm:space-y-4 px-3 sm:px-6 pb-3 sm:pb-6">
                     {post.allImages && post.allImages.length > 1 ? (
                       <ImageSlider
                         images={post.allImages}
                         postUrl={post.postUrl}
                         showImage={showImage}
-                        onDims={(w, h) => setPostDims((prev) => ({ ...prev, [post.id]: { w, h } }))}
+                        onDims={(w, h) =>
+                          setPostDims((prev) => ({
+                            ...prev,
+                            [post.id]: { w, h },
+                          }))
+                        }
                       />
                     ) : post.imageUrl ? (
                       <div
-                        className="relative aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
+                        className="relative aspect-[3/2] sm:aspect-[4/3] overflow-hidden rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
                         onClick={() =>
                           showImage(
                             post.imageUrl,
@@ -827,12 +922,20 @@ export function QueueView() {
                           fill
                           className="object-contain bg-black/5"
                         />
-                        <ResolutionBadge src={post.imageUrl} onDims={(w, h) => setPostDims((prev) => ({ ...prev, [post.id]: { w, h } }))} />
+                        <ResolutionBadge
+                          src={post.imageUrl}
+                          onDims={(w, h) =>
+                            setPostDims((prev) => ({
+                              ...prev,
+                              [post.id]: { w, h },
+                            }))
+                          }
+                        />
                       </div>
                     ) : null}
 
                     {post.description && (
-                      <p className="text-sm text-muted-foreground line-clamp-3">
+                      <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 sm:line-clamp-3">
                         {post.description}
                       </p>
                     )}
@@ -840,9 +943,14 @@ export function QueueView() {
                     {/* Model selector + price + action */}
                     {(() => {
                       const dims = postDims[post.id];
-                      const models = dims ? getModelOptions(dims.w, dims.h) : [];
-                      const selectedModelId = postModel[post.id] || models[0]?.id;
-                      const selectedModel = models.find((m) => m.id === selectedModelId) || models[0];
+                      const models = dims
+                        ? getModelOptions(dims.w, dims.h)
+                        : [];
+                      const selectedModelId =
+                        postModel[post.id] || models[0]?.id;
+                      const selectedModel =
+                        models.find((m) => m.id === selectedModelId) ||
+                        models[0];
                       return (
                         <div className="space-y-2">
                           {models.length > 1 && dims && (
@@ -850,14 +958,20 @@ export function QueueView() {
                               {models.map((m) => (
                                 <button
                                   key={m.id}
-                                  onClick={() => setPostModel((prev) => ({ ...prev, [post.id]: m.id }))}
+                                  onClick={() =>
+                                    setPostModel((prev) => ({
+                                      ...prev,
+                                      [post.id]: m.id,
+                                    }))
+                                  }
                                   className={`text-[10px] px-2 py-1 rounded-md border transition-colors ${
                                     (selectedModelId || models[0]?.id) === m.id
                                       ? "bg-primary text-primary-foreground border-primary"
                                       : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
                                   }`}
                                 >
-                                  {m.name} <span className="font-bold">{m.price}</span>
+                                  {m.name}{" "}
+                                  <span className="font-bold">{m.price}</span>
                                 </button>
                               ))}
                             </div>
@@ -867,7 +981,10 @@ export function QueueView() {
                               <span>👍 {post.score}</span>
                               <span>💬 {post.num_comments}</span>
                               {selectedModel && (
-                                <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] px-1 py-0 font-mono"
+                                >
                                   {selectedModel.price}
                                 </Badge>
                               )}
