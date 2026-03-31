@@ -194,11 +194,13 @@ async function checkReddit(env: Env) {
     // Find new posts
     const newPosts = imagePosts.filter((p: any) => !seenIds.has(p.id));
 
-    // Mark all as seen
-    for (const p of imagePosts) {
-      seenIds.add(p.id);
+    // Only write to KV if there are actually new IDs to save (KV writes are limited to 1,000/day on free tier)
+    if (newPosts.length > 0 || isFirstRun) {
+      for (const p of imagePosts) {
+        seenIds.add(p.id);
+      }
+      await saveSeenIds(env, seenIds);
     }
-    await saveSeenIds(env, seenIds);
 
     // On first run, just save IDs without notifying
     if (isFirstRun || newPosts.length === 0) {
