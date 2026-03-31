@@ -5,10 +5,7 @@ import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 // Route requests through Cloudflare Worker proxy when configured (avoids Vercel IP blocks)
-async function proxyFetch(
-  url: string,
-  init?: RequestInit,
-): Promise<Response> {
+async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
   const proxySecret = process.env.CLOUDFLARE_PROXY_SECRET;
 
@@ -25,7 +22,8 @@ async function proxyFetch(
 async function redditFetch(url: string) {
   const res = await proxyFetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       "Accept-Encoding": "gzip, deflate, br",
