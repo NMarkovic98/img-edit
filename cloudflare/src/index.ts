@@ -175,8 +175,8 @@ async function checkReddit(env: Env) {
     const data = (await res.json()) as any;
     const posts = (data.data?.children || []).map((c: any) => c.data);
 
-    // Filter to image posts from last 30 min
-    const thirtyMinAgo = Date.now() / 1000 - 30 * 60;
+    // Filter to image posts from last 2 hours
+    const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
     const imagePosts = posts.filter((p: any) => {
       const hasImage =
         (p.url &&
@@ -185,7 +185,7 @@ async function checkReddit(env: Env) {
             p.url.includes("i.imgur.com"))) ||
         p.preview?.images?.length > 0 ||
         (p.is_gallery && p.media_metadata);
-      return hasImage && p.created_utc > thirtyMinAgo;
+      return hasImage && p.created_utc > twoHoursAgo;
     });
 
     const seenIds = await getSeenIds(env);

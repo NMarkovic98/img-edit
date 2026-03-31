@@ -73,6 +73,16 @@ export const metadata: Metadata = {
   // Favicons and icons
   icons: {
     icon: "/favicon.ico",
+    apple: "/icon-192.png",
+  },
+
+  manifest: "/manifest.json",
+
+  // Apple PWA — required for push notifications on iOS Safari
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Fixtral",
   },
 
   // Additional meta tags

@@ -245,7 +245,7 @@ async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]): Pr
 function processRawPosts(allPosts: any[]) {
   const posts = allPosts;
 
-  const thirtyMinAgo = Date.now() / 1000 - 30 * 60;
+  const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
 
   function getFullResUrl(mediaId: string, metadata: any): string {
     const mimeType = metadata?.m || "image/jpg";
@@ -286,7 +286,7 @@ function processRawPosts(allPosts: any[]) {
         post.is_self &&
         post.media_metadata &&
         Object.keys(post.media_metadata).length > 0;
-      const isRecent = post.created_utc > thirtyMinAgo;
+      const isRecent = post.created_utc > twoHoursAgo;
       return (hasImage || isGallery || hasSelfPostImages) && isRecent;
     })
     .map((post: any) => {
