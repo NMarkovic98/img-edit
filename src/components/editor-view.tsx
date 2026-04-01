@@ -464,6 +464,7 @@ export function EditorView() {
   const [historyLoading, setHistoryLoading] = useState(false);
   // Sharp corrections state
   const [correctionsEnabled, setCorrectionsEnabled] = useState(false);
+  const [analysisHintsEnabled, setAnalysisHintsEnabled] = useState(true);
   const [correctionPreview, setCorrectionPreview] = useState<{
     correctedImageUrl?: string;
     analysis: {
@@ -609,6 +610,7 @@ export function EditorView() {
           postId: currentItem.post.id || "unknown",
           applyCorrections:
             correctionsEnabled && correctionPreview?.hasCorrections,
+          skipAnalysisHints: !analysisHintsEnabled,
         }),
       });
 
@@ -1099,6 +1101,42 @@ export function EditorView() {
             )}
           </Card>
 
+          {/* Analysis Hints Toggle */}
+          <Card className="shadow-lg border-muted/20">
+            <CardContent className="py-3 px-4">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={analysisHintsEnabled}
+                  onClick={() => setAnalysisHintsEnabled(!analysisHintsEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
+                    analysisHintsEnabled
+                      ? "bg-blue-500"
+                      : "bg-muted-foreground/30"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      analysisHintsEnabled ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+                <div>
+                  <span className="text-sm font-medium">
+                    {analysisHintsEnabled
+                      ? "Analysis hints ON — AI will also fix detected quality issues"
+                      : "Analysis hints OFF — AI will only follow your prompt"}
+                  </span>
+                  <p className="text-[10px] text-muted-foreground">
+                    When on, detected issues (exposure, contrast, etc.) are
+                    appended to the AI prompt
+                  </p>
+                </div>
+              </label>
+            </CardContent>
+          </Card>
+
           {/* Generate Button */}
           <div className="flex justify-center px-2">
             <Button
@@ -1122,6 +1160,14 @@ export function EditorView() {
                       className="ml-2 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30"
                     >
                       + Corrections
+                    </Badge>
+                  )}
+                  {!analysisHintsEnabled && (
+                    <Badge
+                      variant="secondary"
+                      className="ml-1 text-[10px] bg-muted text-muted-foreground border-border"
+                    >
+                      No Hints
                     </Badge>
                   )}
                 </>

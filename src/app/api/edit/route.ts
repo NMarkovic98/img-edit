@@ -547,6 +547,7 @@ export async function POST(request: NextRequest) {
       author,
       postId,
       applyCorrections: shouldCorrect,
+      skipAnalysisHints: rawSkipAnalysisHints,
     } = await request.json();
 
     if (!rawImageUrl || !changeSummary) {
@@ -562,6 +563,7 @@ export async function POST(request: NextRequest) {
     const category: EditCategory = editCategory || "remove_object";
     const faceEdit: boolean = hasFaceEdit ?? false;
     const aiPolicy: AiPolicy = rawAiPolicy || "unknown";
+    const skipAnalysisHints: boolean = rawSkipAnalysisHints ?? false;
 
     console.log(
       `[edit] Category: ${category} | Face edit: ${faceEdit} | AI policy: ${aiPolicy}`,
@@ -649,11 +651,13 @@ export async function POST(request: NextRequest) {
       if (analysis.hints.length > 0) {
         console.log(`[edit] ${analysis.summary}`);
         console.log(`[edit] Metrics: ${JSON.stringify(analysis.metrics)}`);
-        // For NO AI: skip quality hints to avoid visible changes
-        if (aiPolicy !== "no_ai") {
+        // Skip hints if: NO AI policy, or user explicitly opted out
+        if (aiPolicy !== "no_ai" && !skipAnalysisHints) {
           qualityHints =
             "\n\nAlso subtly improve the following image quality issues while performing the edit (apply corrections naturally, do not overcorrect): " +
             analysis.hints.join(" ");
+        } else if (skipAnalysisHints) {
+          console.log("[edit] Analysis hints skipped (user opt-out)");
         }
       } else {
         console.log("[edit] Image quality OK — no corrections needed");

@@ -103,23 +103,45 @@ interface ModelOption {
   tier: string;
 }
 
-function getModelOptions(w: number, h: number): ModelOption[] {
+function getModelOptions(w: number, h: number, isPaid = false): ModelOption[] {
   const max = Math.max(w, h);
   const megapixels = Math.ceil((w * h) / 1_000_000);
 
+  // Resolution tier
+  const resTier = max >= 3840 ? "4K" : max >= 1920 ? "2K" : "1K";
+
   // Resolution-dependent pricing
   const fluxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(2);
+  const nbProPrice = max >= 3840 ? "$0.30" : max >= 1920 ? "$0.15" : "$0.15";
+
+  // Paid posts: only NB Pro + FLUX 2 Pro (best quality models)
+  if (isPaid) {
+    return [
+      {
+        id: "nano-banana-pro",
+        name: `NB Pro ${resTier}`,
+        price: nbProPrice,
+        tier: resTier,
+      },
+      {
+        id: "flux-2-pro",
+        name: `FLUX 2 Pro`,
+        price: `~$${fluxPrice}`,
+        tier: resTier,
+      },
+    ];
+  }
+
+  // Free posts: full model list, resolution-aware
   const nb2Price = max >= 3840 ? "$0.16" : max >= 1920 ? "$0.12" : "$0.08";
-  const nb2Res = max >= 3840 ? "4K" : max >= 1920 ? "2K" : "1K";
 
   const models: ModelOption[] = [];
 
-  // For 4K+ images: prioritize models that handle high resolution natively
   if (max >= 3840) {
     models.push(
       {
         id: "nano-banana-2",
-        name: `NB2 ${nb2Res}`,
+        name: `NB2 ${resTier}`,
         price: nb2Price,
         tier: "4K",
       },
@@ -138,11 +160,10 @@ function getModelOptions(w: number, h: number): ModelOption[] {
       },
     );
   } else if (max >= 1920) {
-    // 2K: NB2, FLUX 2 Pro, Seedream all handle this well
     models.push(
       {
         id: "nano-banana-2",
-        name: `NB2 ${nb2Res}`,
+        name: `NB2 ${resTier}`,
         price: nb2Price,
         tier: "2K",
       },
@@ -163,13 +184,12 @@ function getModelOptions(w: number, h: number): ModelOption[] {
       { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "~1K" },
     );
   } else {
-    // SD/HD/FHD: cheaper models, Kontext first
     models.push(
       { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "1K" },
       { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "1K" },
       {
         id: "nano-banana-2",
-        name: `NB2 ${nb2Res}`,
+        name: `NB2 ${resTier}`,
         price: nb2Price,
         tier: "1K",
       },
@@ -1124,7 +1144,7 @@ export function QueueView() {
                     {(() => {
                       const dims = postDims[post.id];
                       const models = dims
-                        ? getModelOptions(dims.w, dims.h)
+                        ? getModelOptions(dims.w, dims.h, post.isPaid)
                         : [];
                       const selectedModelId = postModel[post.id] || null; // null = Auto (smart routing)
                       const selectedModel = selectedModelId
