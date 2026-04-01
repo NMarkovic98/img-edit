@@ -38,24 +38,59 @@ function getImageDimensions(buf: Buffer): { width: number; height: number } {
   if (buf[0] === 0xff && buf[1] === 0xd8) {
     let offset = 2;
     while (offset < buf.length - 8) {
-      if (buf[offset] !== 0xff) { offset++; continue; }
+      if (buf[offset] !== 0xff) {
+        offset++;
+        continue;
+      }
       const marker = buf[offset + 1];
       if (marker >= 0xc0 && marker <= 0xc3) {
-        return { height: buf.readUInt16BE(offset + 5), width: buf.readUInt16BE(offset + 7) };
+        return {
+          height: buf.readUInt16BE(offset + 5),
+          width: buf.readUInt16BE(offset + 7),
+        };
       }
       offset += 2 + buf.readUInt16BE(offset + 2);
     }
   }
-  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
-    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x58) {
-      return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 };
+  if (
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46
+  ) {
+    if (
+      buf[12] === 0x56 &&
+      buf[13] === 0x50 &&
+      buf[14] === 0x38 &&
+      buf[15] === 0x58
+    ) {
+      return {
+        width: buf.readUIntLE(24, 3) + 1,
+        height: buf.readUIntLE(27, 3) + 1,
+      };
     }
-    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x4c) {
+    if (
+      buf[12] === 0x56 &&
+      buf[13] === 0x50 &&
+      buf[14] === 0x38 &&
+      buf[15] === 0x4c
+    ) {
       const bits = buf.readUInt32LE(21);
-      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+      return {
+        width: (bits & 0x3fff) + 1,
+        height: ((bits >> 14) & 0x3fff) + 1,
+      };
     }
-    if (buf[12] === 0x56 && buf[13] === 0x50 && buf[14] === 0x38 && buf[15] === 0x20) {
-      return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+    if (
+      buf[12] === 0x56 &&
+      buf[13] === 0x50 &&
+      buf[14] === 0x38 &&
+      buf[15] === 0x20
+    ) {
+      return {
+        width: buf.readUInt16LE(26) & 0x3fff,
+        height: buf.readUInt16LE(28) & 0x3fff,
+      };
     }
   }
   return { width: 1024, height: 1024 };
@@ -85,7 +120,9 @@ export async function POST(request: NextRequest) {
         const buf = Buffer.from(await res.arrayBuffer());
         const dims = getImageDimensions(buf);
         resolution = pickResolution(dims.width, dims.height);
-        console.log(`[gemini/edit] Input: ${dims.width}x${dims.height}, resolution: ${resolution}`);
+        console.log(
+          `[gemini/edit] Input: ${dims.width}x${dims.height}, resolution: ${resolution}`,
+        );
       }
     } catch {
       console.warn("[gemini/edit] Could not detect dimensions, using 1K");
@@ -110,20 +147,19 @@ export async function POST(request: NextRequest) {
 
     console.log(`[gemini/edit] Prompt: ${prompt.slice(0, 200)}`);
 
-    // Call fal.ai nano-banana-pro/edit
-    const result = await fal.subscribe("fal-ai/nano-banana-pro/edit", {
+    // Call fal.ai — use FLUX Kontext Pro as default (best all-rounder, face-safe)
+    const result = await fal.subscribe("fal-ai/flux-pro/kontext", {
       input: {
         prompt,
-        image_urls: [imageUrl],
-        num_images: 1,
-        resolution,
-        output_format: "png",
+        image_url: imageUrl,
         safety_tolerance: "6",
       } as any,
       logs: true,
       onQueueUpdate: (update) => {
         if (update.status === "IN_PROGRESS" && "logs" in update) {
-          update.logs?.map((log) => log.message).forEach((msg) => console.log("[fal]", msg));
+          update.logs
+            ?.map((log) => log.message)
+            .forEach((msg) => console.log("[fal]", msg));
         }
       },
     });
@@ -146,7 +182,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to process image edit",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to process image edit",
         processingTime: Date.now() - startTime,
       },
       { status: 500 },

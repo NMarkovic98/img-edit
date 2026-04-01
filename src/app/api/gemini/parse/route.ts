@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
+import type { EditCategory } from "@/types";
+import { CATEGORY_MODEL_MAP, CATEGORY_LABELS } from "@/types";
 
 interface ImageInput {
   base64: string;
@@ -23,6 +25,8 @@ interface PromptEngineResponse {
   prompt: string;
   model: string;
   edit_type: string;
+  edit_category: EditCategory;
+  has_face_edit: boolean;
   resolution: string;
   aspect_ratio: string;
   nsfw_flag: boolean;
@@ -69,11 +73,9 @@ function getAspectRatio(width: number, height: number): string {
   return closest.name;
 }
 
-function getModelId(editType: string): string {
-  // For now, always use Nano Banana Pro
-  // Later: add other models for non-people edits
-  void editType;
-  return "fal-ai/nano-banana-pro/edit";
+function getModelId(category: EditCategory): string {
+  const models = CATEGORY_MODEL_MAP[category];
+  return models?.[0] ?? "fal-ai/flux-pro/kontext";
 }
 
 function detectMimeType(base64: string): string {
@@ -84,9 +86,47 @@ function detectMimeType(base64: string): string {
   return "image/jpeg";
 }
 
-const SYSTEM_PROMPT = `You are Fixtral's prompt engineer. You receive a user's photo editing request and the actual image.
+// Map legacy edit_type strings to new EditCategory
+function mapLegacyEditType(editType: string): EditCategory {
+  switch (editType) {
+    case "people":
+      return "remove_object";
+    case "background":
+      return "remove_background";
+    case "object":
+      return "remove_object";
+    case "text_removal":
+      return "text_edit";
+    case "enhancement":
+      return "enhance_beautify";
+    case "composite":
+      return "composite_multi";
+    default:
+      return "remove_object";
+  }
+}
 
-Your job is to generate an optimized editing prompt for the fal.ai Nano Banana Pro image editing API.
+const VALID_CATEGORIES: EditCategory[] = [
+  "remove_object",
+  "remove_background",
+  "enhance_beautify",
+  "restore_old_photo",
+  "face_swap",
+  "add_object",
+  "color_correction",
+  "scene_change",
+  "creative_fun",
+  "text_edit",
+  "composite_multi",
+  "body_modification",
+  "professional_headshot",
+];
+
+const SYSTEM_PROMPT = `You are Fixtral's prompt engineer and request classifier. You receive a user's photo editing request and the actual image.
+
+Your job is TWO things:
+1. CLASSIFY the request into a category for automatic model selection
+2. Generate an optimized editing prompt for the fal.ai image editing API
 
 ANALYZE THE IMAGE FIRST:
 - Identify all people (positions: left, center, right, foreground, background)
@@ -97,10 +137,38 @@ ANALYZE THE IMAGE FIRST:
 THEN generate your response as JSON:
 
 {
+  "edit_category": "one of the categories below",
+  "has_face_edit": true/false,
   "edit_type": "people|background|object|text_removal|enhancement|composite",
   "prompt": "your detailed editing prompt here",
   "nsfw_flag": false
 }
+
+CATEGORIES — pick the BEST match:
+- "remove_object" — Remove a person, object, or unwanted element from the image
+- "remove_background" — Remove or completely replace the background
+- "enhance_beautify" — Improve quality, lighting, skin smoothing, general beautification
+- "restore_old_photo" — Fix old, damaged, faded, or low-quality old photographs
+- "face_swap" — Swap faces between people in the image
+- "add_object" — Add a new object, person, or element to the scene
+- "color_correction" — Fix colors, white balance, skin tone, remove jaundice/redness
+- "scene_change" — Change environment, season, time of day, weather
+- "creative_fun" — Funny, creative, absurd, or meme-style edits
+- "text_edit" — Edit, add, or remove text that appears on/in the image
+- "composite_multi" — Combine multiple reference images into one composite
+- "body_modification" — Change pose, height, proportions, stance, open/close eyes
+- "professional_headshot" — Make a professional portrait, LinkedIn photo, corporate headshot
+
+HAS_FACE_EDIT — set to true if the edit DIRECTLY modifies a human face:
+- Changing skin color/tone: true
+- Removing jaundice/redness from face: true
+- Opening/closing eyes: true
+- Face swap: true
+- Smoothing skin / beautifying portrait: true
+- Removing a person (not editing their face, removing them entirely): false
+- Changing background behind a person: false
+- Adding an object to someone's hand: false
+- Creative edits that don't alter facial features: false
 
 PROMPT STRUCTURE — always follow this 3-part format:
 
@@ -218,7 +286,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let parsed: { edit_type: string; prompt: string; nsfw_flag: boolean };
+    let parsed: {
+      edit_type: string;
+      edit_category?: string;
+      has_face_edit?: boolean;
+      prompt: string;
+      nsfw_flag: boolean;
+    };
 
     try {
       parsed = JSON.parse(cleanedText);
@@ -229,18 +303,31 @@ export async function POST(request: NextRequest) {
       );
       parsed = {
         edit_type: "composite",
+        edit_category: "remove_object",
+        has_face_edit: false,
         prompt: userText,
         nsfw_flag: false,
       };
     }
+
+    // Validate category — fallback to remove_object if invalid
+    const category: EditCategory = VALID_CATEGORIES.includes(
+      parsed.edit_category as EditCategory,
+    )
+      ? (parsed.edit_category as EditCategory)
+      : mapLegacyEditType(parsed.edit_type);
+
+    const hasFaceEdit = parsed.has_face_edit ?? false;
 
     // Use main image (first) dimensions for resolution/aspect ratio
     const mainImage = allImages[0];
 
     const result: PromptEngineResponse = {
       prompt: parsed.prompt,
-      model: getModelId(parsed.edit_type),
+      model: getModelId(category),
       edit_type: parsed.edit_type,
+      edit_category: category,
+      has_face_edit: hasFaceEdit,
       resolution: getResolutionTier(mainImage.width, mainImage.height),
       aspect_ratio: getAspectRatio(mainImage.width, mainImage.height),
       nsfw_flag: parsed.nsfw_flag,
@@ -263,8 +350,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         prompt: fallbackPrompt,
-        model: "fal-ai/nano-banana-pro/edit",
+        model: "fal-ai/flux-pro/kontext",
         edit_type: "composite",
+        edit_category: "remove_object" as EditCategory,
+        has_face_edit: false,
         resolution: "1K",
         aspect_ratio: "1:1",
         nsfw_flag: false,

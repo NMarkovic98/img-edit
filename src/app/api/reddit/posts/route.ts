@@ -155,7 +155,9 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
 let lastPosts: any[] = [];
 
 // Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
-async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
+async function fetchPostsViaAPI(
+  subreddits: string[] = ["PhotoshopRequest"],
+): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
   const multiSub = subreddits.join("+");
 
   // Try OAuth API first (600 req/10min limit vs ~100/min for public)
@@ -238,7 +240,9 @@ async function fetchPostsViaAPI(subreddits: string[] = ["PhotoshopRequest"]): Pr
     return { posts: processRawPosts(allPosts), rateLimited: false };
   } catch (err) {
     console.error("Reddit fetch error:", err);
-    return lastPosts.length > 0 ? { posts: processRawPosts(lastPosts), rateLimited: false } : { posts: [], rateLimited: false };
+    return lastPosts.length > 0
+      ? { posts: processRawPosts(lastPosts), rateLimited: false }
+      : { posts: [], rateLimited: false };
   }
 }
 
@@ -580,6 +584,28 @@ export async function PUT(request: NextRequest) {
 
     const LANGUAGE_RULE = `LANGUAGE RULE: Do NOT use words like vape, cigarette, gun, weapon, knife, blood, drug, alcohol, nude, naked, smoke, smoking. Use neutral alternatives like "small object", "item", "beverage", "haze".`;
 
+    const CATEGORY_INSTRUCTION = `
+
+AFTER the editing instruction, on a NEW LINE, output a JSON object with classification:
+{"edit_category": "<category>", "has_face_edit": true/false}
+
+CATEGORIES (pick ONE):
+- "remove_object" — Remove a person, object, or unwanted element
+- "remove_background" — Remove or replace the background
+- "enhance_beautify" — Improve quality, lighting, skin, beautification
+- "restore_old_photo" — Fix old, damaged, or faded photo
+- "face_swap" — Swap faces between people
+- "add_object" — Add object/element to scene
+- "color_correction" — Fix colors, skin tone, white balance
+- "scene_change" — Change environment, season, weather
+- "creative_fun" — Funny, creative, meme edits
+- "text_edit" — Edit/add/remove text on image
+- "composite_multi" — Combine multiple photos into one
+- "body_modification" — Change pose, height, proportions, open/close eyes
+- "professional_headshot" — Make professional portrait
+
+has_face_edit = true ONLY when the edit directly modifies facial features (skin tone, eyes, face swap, beautify face). Removing a person or changing background = false.`;
+
     const analysisPrompt = hasMultipleImages
       ? `Look at the image(s) and the user's request. Write a short editing instruction for an image-editing AI.
 
@@ -598,8 +624,7 @@ STRICT RULES:
 - Maximum 1-2 sentences. Shorter is better.
 
 ${LANGUAGE_RULE}
-
-Return ONLY the editing instruction.`
+${CATEGORY_INSTRUCTION}`
       : `Look at the image and the user's request. Write a short editing instruction for an image-editing AI.
 
 USER REQUEST:
@@ -614,8 +639,7 @@ STRICT RULES:
 - Maximum 1-2 sentences. Shorter is better.
 
 ${LANGUAGE_RULE}
-
-Return ONLY the editing instruction.`;
+${CATEGORY_INSTRUCTION}`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -627,19 +651,42 @@ Return ONLY the editing instruction.`;
       ],
     });
 
-    const changeSummary =
+    const rawText =
       response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
 
-    if (!changeSummary) {
+    if (!rawText) {
       throw new Error("Analysis returned empty response");
     }
 
-    console.log("Analysis complete:", changeSummary);
+    // Parse: first line(s) = editing instruction, last line = JSON classification
+    let changeSummary = rawText;
+    let editCategory = "remove_object";
+    let hasFaceEdit = false;
+
+    const jsonMatch = rawText.match(/\{[^}]*"edit_category"[^}]*\}/);
+    if (jsonMatch) {
+      try {
+        const classification = JSON.parse(jsonMatch[0]);
+        editCategory = classification.edit_category || "remove_object";
+        hasFaceEdit = classification.has_face_edit ?? false;
+        // Remove the JSON from the editing instruction
+        changeSummary = rawText.replace(jsonMatch[0], "").trim();
+      } catch {
+        // Failed to parse classification JSON — keep defaults
+      }
+    }
+
+    console.log(
+      `Analysis complete [${editCategory}${hasFaceEdit ? " FACE" : ""}]:`,
+      changeSummary,
+    );
 
     return new Response(
       JSON.stringify({
         ok: true,
         changeSummary,
+        editCategory,
+        hasFaceEdit,
         imageCount: imageParts.length,
         timestamp: new Date().toISOString(),
       }),

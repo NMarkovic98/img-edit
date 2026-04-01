@@ -57,6 +57,8 @@ interface AnalysisResult {
   postId: string;
   originalPost: RedditPost;
   analysis: string;
+  editCategory?: string;
+  hasFaceEdit?: boolean;
   timestamp: string;
 }
 
@@ -90,7 +92,7 @@ function timeAgo(utc: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Model pricing & selection system
+// Model pricing & selection system (category-aware)
 // ---------------------------------------------------------------------------
 interface ModelOption {
   id: string;
@@ -102,66 +104,80 @@ interface ModelOption {
 function getModelOptions(w: number, h: number): ModelOption[] {
   const max = Math.max(w, h);
   const megapixels = Math.ceil((w * h) / 1_000_000);
-  // FLUX 2 Pro: $0.03 first MP + $0.015 per extra MP (rounded up)
   const fluxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(2);
 
-  if (max >= 4097) {
-    return [
-      {
-        id: "flux-2-pro",
-        name: "FLUX 2 Pro",
-        price: `~$${fluxPrice}`,
-        tier: "4K+",
-      },
-      {
-        id: "nano-banana-4k",
-        name: "Nano Banana Pro 4K",
-        price: "$0.30",
-        tier: "4K+",
-      },
-    ];
-  }
-  if (max >= 2560) {
-    return [
-      { id: "seedream-4k", name: "Seedream v4.5", price: "$0.04", tier: "2K" },
-      {
-        id: "nano-banana-4k",
-        name: "Nano Banana Pro 4K",
-        price: "$0.30",
-        tier: "2K",
-      },
-    ];
-  }
-  if (max >= 1920) {
-    return [
-      { id: "seedream-2k", name: "Seedream v4.5", price: "$0.04", tier: "FHD" },
-      {
-        id: "nano-banana-2k",
-        name: "Nano Banana Pro 2K",
-        price: "$0.15",
-        tier: "FHD",
-      },
-    ];
-  }
-  if (max >= 1280) {
-    return [
-      {
-        id: "nano-banana-2k",
-        name: "Nano Banana Pro 2K",
-        price: "$0.15",
-        tier: "HD",
-      },
-    ];
-  }
-  return [
-    { id: "gpt-image", name: "GPT Image 1.5", price: "~$0.20", tier: "SD" },
+  // Always show all available models, sorted by recommendation for this resolution
+  const allModels: ModelOption[] = [
+    { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "All" },
+    { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "All" },
     {
-      id: "nano-banana-1k",
-      name: "Nano Banana Pro 1K",
-      price: "$0.15",
-      tier: "SD",
+      id: "flux-2-pro",
+      name: "FLUX 2 Pro",
+      price: `~$${fluxPrice}`,
+      tier: "All",
+    },
+    { id: "nano-banana-2", name: "Nano Banana 2", price: "$0.08", tier: "All" },
+    {
+      id: "seedream-5-lite",
+      name: "Seedream 5.0",
+      price: "$0.035",
+      tier: "All",
     },
   ];
+
+  // For high-res, also show Nano Banana Pro
+  if (max >= 1920) {
+    allModels.push({
+      id: "nano-banana-pro",
+      name: "NB Pro",
+      price: "$0.15",
+      tier: "HD+",
+    });
+  }
+
+  // Background removal
+  allModels.push({
+    id: "bria-bg-remove",
+    name: "BG Remove",
+    price: "$0.018",
+    tier: "Util",
+  });
+
+  return allModels;
+}
+
+// Category label & model lookup for display
+const CATEGORY_DISPLAY: Record<string, { label: string; model: string }> = {
+  remove_object: {
+    label: "🗑️ Remove Object/Person",
+    model: "FLUX Kontext Pro",
+  },
+  remove_background: { label: "🖼️ Remove Background", model: "Bria RMBG 2.0" },
+  enhance_beautify: { label: "✨ Enhance / Beautify", model: "FLUX 2 Pro" },
+  restore_old_photo: { label: "🔧 Restore Old Photo", model: "Nano Banana 2" },
+  face_swap: { label: "🔄 Face Swap", model: "FLUX Kontext Pro" },
+  add_object: { label: "➕ Add Object", model: "FLUX 2 Pro" },
+  color_correction: { label: "🎨 Color Correction", model: "FLUX Kontext Pro" },
+  scene_change: { label: "🌅 Scene Change", model: "Seedream 5.0 Lite" },
+  creative_fun: { label: "🎭 Creative / Fun", model: "Nano Banana 2" },
+  text_edit: { label: "✏️ Text Edit", model: "FLUX Kontext Max" },
+  composite_multi: { label: "🧩 Combine Photos", model: "Nano Banana 2" },
+  body_modification: {
+    label: "🦴 Body Modification",
+    model: "FLUX Kontext Pro",
+  },
+  professional_headshot: {
+    label: "📸 Professional Headshot",
+    model: "FLUX 2 Pro",
+  },
+};
+
+function getCategoryLabel(category: string): string {
+  return CATEGORY_DISPLAY[category]?.label || category;
+}
+
+function getCategoryModel(category: string): string {
+  return CATEGORY_DISPLAY[category]?.model || "Auto";
 }
 
 // Resolution badge — loads image natively to read naturalWidth × naturalHeight
@@ -380,7 +396,10 @@ export function QueueView() {
     if (!highlightPostId || posts.length === 0) return;
     const el = document.getElementById(`post-${highlightPostId}`);
     if (el) {
-      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+      setTimeout(
+        () => el.scrollIntoView({ behavior: "smooth", block: "center" }),
+        200,
+      );
       // Clear highlight after 5 seconds
       setTimeout(() => setHighlightPostId(null), 5000);
     }
@@ -461,7 +480,8 @@ export function QueueView() {
             if (seen.has(p.id)) return false;
             seen.add(p.id);
             // Filter out solved requests
-            if (p.flair && p.flair.toLowerCase().includes("solved")) return false;
+            if (p.flair && p.flair.toLowerCase().includes("solved"))
+              return false;
             return true;
           });
 
@@ -525,6 +545,8 @@ export function QueueView() {
           postId: postId,
           originalPost: post,
           analysis: result.changeSummary,
+          editCategory: result.editCategory,
+          hasFaceEdit: result.hasFaceEdit,
           timestamp: result.timestamp,
         });
       } else {
@@ -537,8 +559,18 @@ export function QueueView() {
   };
 
   // Send analyzed post to editor (for the new workflow)
-  const sendToEditor = (post: RedditPost, analysis: string) => {
-    console.log("Sending to editor:", { post, analysis });
+  const sendToEditor = (
+    post: RedditPost,
+    analysis: string,
+    editCategory?: string,
+    hasFaceEdit?: boolean,
+  ) => {
+    console.log("Sending to editor:", {
+      post,
+      analysis,
+      editCategory,
+      hasFaceEdit,
+    });
 
     const requestId = `req_${Date.now()}_${post.id}`;
 
@@ -559,6 +591,8 @@ export function QueueView() {
       allImages: post.allImages || [post.imageUrl],
       analysis: analysis,
       modelOverride: postModel[post.id] || null,
+      editCategory: editCategory || null,
+      hasFaceEdit: hasFaceEdit ?? false,
       timestamp: new Date().toISOString(),
     };
 
@@ -731,6 +765,30 @@ export function QueueView() {
                   <Wand2 className="h-4 w-4 text-primary" />
                   <span>AI-Generated Edit Prompt</span>
                 </h3>
+
+                {/* Category badge */}
+                {analysisResult.editCategory && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge
+                      variant="default"
+                      className="text-xs px-2.5 py-1 bg-primary/90"
+                    >
+                      {getCategoryLabel(analysisResult.editCategory)}
+                    </Badge>
+                    {analysisResult.hasFaceEdit && (
+                      <Badge
+                        variant="outline"
+                        className="text-xs px-2 py-1 border-amber-500 text-amber-600 dark:text-amber-400"
+                      >
+                        👤 Face Edit — Face-Safe Models Only
+                      </Badge>
+                    )}
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      → {getCategoryModel(analysisResult.editCategory)}
+                    </span>
+                  </div>
+                )}
+
                 <div className="bg-card p-4 sm:p-6 rounded-xl border shadow-sm">
                   <div className="flex items-start space-x-3">
                     <div className="p-2 bg-primary/10 rounded-lg">
@@ -750,6 +808,8 @@ export function QueueView() {
                       sendToEditor(
                         analysisResult.originalPost,
                         analysisResult.analysis,
+                        analysisResult.editCategory,
+                        analysisResult.hasFaceEdit,
                       )
                     }
                     className="flex-1 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-200 mobile-button"

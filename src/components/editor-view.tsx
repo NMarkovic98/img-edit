@@ -399,6 +399,8 @@ interface EditorItem {
   allImages: string[];
   analysis: string;
   modelOverride?: string | null;
+  editCategory?: string | null;
+  hasFaceEdit?: boolean;
   timestamp: string;
 }
 
@@ -545,6 +547,8 @@ export function EditorView() {
           changeSummary: editPrompt,
           allImages: currentItem.allImages || [currentItem.post.imageUrl],
           modelOverride: currentItem.modelOverride || null,
+          editCategory: currentItem.editCategory || null,
+          hasFaceEdit: currentItem.hasFaceEdit ?? false,
         }),
       });
 
@@ -850,7 +854,22 @@ export function EditorView() {
                 requirements
               </CardDescription>
             </CardHeader>
-            <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6">
+            <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6 space-y-3">
+              {/* Category badge */}
+              {currentItem.editCategory && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-primary/10 text-primary border border-primary/20">
+                    {currentItem.editCategory
+                      .replace(/_/g, " ")
+                      .replace(/\b\w/g, (c) => c.toUpperCase())}
+                  </span>
+                  {currentItem.hasFaceEdit && (
+                    <span className="text-xs px-2 py-1 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                      👤 Face-Safe
+                    </span>
+                  )}
+                </div>
+              )}
               <textarea
                 value={editPrompt}
                 onChange={(e) => setEditPrompt(e.target.value)}
