@@ -620,7 +620,7 @@ AFTER the editing instruction, on a NEW LINE, output a JSON object with classifi
 CATEGORIES (pick ONE):
 - "remove_object" — Remove a person, object, or unwanted element
 - "remove_background" — Remove or replace the background
-- "enhance_beautify" — Improve quality, lighting, skin, beautification
+- "enhance_beautify" — Improve quality, lighting, skin, beautification, unblur, sharpen, clear up, fix focus
 - "restore_old_photo" — Fix old, damaged, or faded photo
 - "face_swap" — Swap faces between people
 - "add_object" — Add object/element to scene
@@ -642,36 +642,42 @@ has_face_edit = true ONLY when the edit directly modifies facial features (skin 
           : "";
 
     const analysisPrompt = hasMultipleImages
-      ? `Look at the image(s) and the user's request. Write a short editing instruction for an image-editing AI.
+      ? `You are an image-editing instruction writer. Read the user's request CAREFULLY and write a short editing instruction for an AI image editor.
 
-USER REQUEST:
+YOUR #1 PRIORITY: Follow EXACTLY what the user asked for in their title and description. Do NOT invent, add, or hallucinate actions that the user did not request. If the user says "unblur" or "clear up" or "enhance", your instruction must be about enhancement — NOT about removing or adding objects.
+
+USER REQUEST (THIS IS YOUR SOURCE OF TRUTH):
 Title: "${title || "No title"}"
 Description: "${description || "No description provided"}"
 
 The FIRST image is the main image. The other image(s) are references.
 
 STRICT RULES:
-- Describe the edit using VISUAL/SPATIAL terms based on what you SEE in the image. The image editor cannot understand relationships like "my boyfriend", "my friend", "my ex". Instead describe by position or appearance: "the person on the left", "the hand on the woman's chest", "the person standing behind".
-- Output ONLY what the user asked for. Nothing extra.
-- Do NOT add quality improvements, color corrections, sharpening, or any enhancement.
-- Do NOT mention faces, expressions, lighting, or composition unless the user did.
+- Your instruction MUST match the user's request. Re-read the title and description before writing.
+- Describe the edit using VISUAL/SPATIAL terms. Instead of "my boyfriend" or "my friend", describe by position or appearance: "the person on the left", "the woman in the red dress".
+- Output ONLY what the user asked for. Nothing extra. Do NOT add your own interpretation.
+- Do NOT mention objects, people, or actions the user did not mention.
+- Do NOT add quality improvements, color corrections, or sharpening unless the user asked for it.
 - If using a reference, say ONLY what the user wants copied from it.
-- Maximum 1-2 sentences. Shorter is better.${aiPolicyRule}
+- Maximum 1-3 sentences. Be specific and concise.${aiPolicyRule}
 
 ${LANGUAGE_RULE}
 ${CATEGORY_INSTRUCTION}`
-      : `Look at the image and the user's request. Write a short editing instruction for an image-editing AI.
+      : `You are an image-editing instruction writer. Read the user's request CAREFULLY and write a short editing instruction for an AI image editor.
 
-USER REQUEST:
+YOUR #1 PRIORITY: Follow EXACTLY what the user asked for in their title and description. Do NOT invent, add, or hallucinate actions that the user did not request. If the user says "unblur" or "clear up" or "enhance", your instruction must be about enhancement — NOT about removing or adding objects.
+
+USER REQUEST (THIS IS YOUR SOURCE OF TRUTH):
 Title: "${title || "No title"}"
 Description: "${description || "No description provided"}"
 
 STRICT RULES:
-- Describe the edit using VISUAL/SPATIAL terms based on what you SEE in the image. The image editor cannot understand relationships like "my boyfriend", "my friend", "my ex". Instead describe by position or appearance: "the person on the left", "the hand on the woman's chest", "the person standing behind".
-- Output ONLY what the user asked for. Nothing extra.
-- Do NOT add quality improvements, color corrections, sharpening, or any enhancement.
-- Do NOT mention faces, expressions, lighting, or composition unless the user did.
-- Maximum 1-2 sentences. Shorter is better.${aiPolicyRule}
+- Your instruction MUST match the user's request. Re-read the title and description before writing.
+- Describe the edit using VISUAL/SPATIAL terms. Instead of "my boyfriend" or "my friend", describe by position or appearance: "the person on the left", "the woman in the red dress".
+- Output ONLY what the user asked for. Nothing extra. Do NOT add your own interpretation.
+- Do NOT mention objects, people, or actions the user did not mention.
+- Do NOT add quality improvements, color corrections, or sharpening unless the user asked for it.
+- Maximum 1-3 sentences. Be specific and concise.${aiPolicyRule}
 
 ${LANGUAGE_RULE}
 ${CATEGORY_INSTRUCTION}`;

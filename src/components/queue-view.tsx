@@ -94,7 +94,7 @@ function timeAgo(utc: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Model pricing & selection system (category-aware)
+// Model pricing & selection system (resolution-aware)
 // ---------------------------------------------------------------------------
 interface ModelOption {
   id: string;
@@ -106,46 +106,97 @@ interface ModelOption {
 function getModelOptions(w: number, h: number): ModelOption[] {
   const max = Math.max(w, h);
   const megapixels = Math.ceil((w * h) / 1_000_000);
+
+  // Resolution-dependent pricing
   const fluxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(2);
+  const nb2Price = max >= 3840 ? "$0.16" : max >= 1920 ? "$0.12" : "$0.08";
+  const nb2Res = max >= 3840 ? "4K" : max >= 1920 ? "2K" : "1K";
 
-  // Always show all available models, sorted by recommendation for this resolution
-  const allModels: ModelOption[] = [
-    { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "All" },
-    { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "All" },
-    {
-      id: "flux-2-pro",
-      name: "FLUX 2 Pro",
-      price: `~$${fluxPrice}`,
-      tier: "All",
-    },
-    { id: "nano-banana-2", name: "Nano Banana 2", price: "$0.08", tier: "All" },
-    {
-      id: "seedream-5-lite",
-      name: "Seedream 5.0",
-      price: "$0.035",
-      tier: "All",
-    },
-  ];
+  const models: ModelOption[] = [];
 
-  // For high-res, also show Nano Banana Pro
-  if (max >= 1920) {
-    allModels.push({
-      id: "nano-banana-pro",
-      name: "NB Pro",
-      price: "$0.15",
-      tier: "HD+",
-    });
+  // For 4K+ images: prioritize models that handle high resolution natively
+  if (max >= 3840) {
+    models.push(
+      {
+        id: "nano-banana-2",
+        name: `NB2 ${nb2Res}`,
+        price: nb2Price,
+        tier: "4K",
+      },
+      {
+        id: "flux-2-pro",
+        name: "FLUX 2 Pro",
+        price: `~$${fluxPrice}`,
+        tier: "4K",
+      },
+      { id: "nano-banana-pro", name: "NB Pro 4K", price: "$0.30", tier: "4K" },
+      {
+        id: "seedream-5-lite",
+        name: "Seedream 5.0",
+        price: "$0.035",
+        tier: "4K",
+      },
+    );
+  } else if (max >= 1920) {
+    // 2K: NB2, FLUX 2 Pro, Seedream all handle this well
+    models.push(
+      {
+        id: "nano-banana-2",
+        name: `NB2 ${nb2Res}`,
+        price: nb2Price,
+        tier: "2K",
+      },
+      {
+        id: "flux-2-pro",
+        name: "FLUX 2 Pro",
+        price: `~$${fluxPrice}`,
+        tier: "2K",
+      },
+      {
+        id: "seedream-5-lite",
+        name: "Seedream 5.0",
+        price: "$0.035",
+        tier: "2K",
+      },
+      { id: "nano-banana-pro", name: "NB Pro 2K", price: "$0.15", tier: "2K" },
+      { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "~1K" },
+      { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "~1K" },
+    );
+  } else {
+    // SD/HD/FHD: cheaper models, Kontext first
+    models.push(
+      { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "1K" },
+      { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "1K" },
+      {
+        id: "nano-banana-2",
+        name: `NB2 ${nb2Res}`,
+        price: nb2Price,
+        tier: "1K",
+      },
+      {
+        id: "flux-2-pro",
+        name: "FLUX 2 Pro",
+        price: `~$${fluxPrice}`,
+        tier: "1K",
+      },
+      {
+        id: "seedream-5-lite",
+        name: "Seedream 5.0",
+        price: "$0.035",
+        tier: "1K",
+      },
+    );
   }
 
-  // Background removal
-  allModels.push({
+  // Background removal — always available
+  models.push({
     id: "bria-bg-remove",
     name: "BG Remove",
     price: "$0.018",
     tier: "Util",
   });
 
-  return allModels;
+  return models;
 }
 
 // Category label & model lookup for display
@@ -1075,15 +1126,30 @@ export function QueueView() {
                       const models = dims
                         ? getModelOptions(dims.w, dims.h)
                         : [];
-                      const selectedModelId =
-                        postModel[post.id] || models[0]?.id;
-                      const selectedModel =
-                        models.find((m) => m.id === selectedModelId) ||
-                        models[0];
+                      const selectedModelId = postModel[post.id] || null; // null = Auto (smart routing)
+                      const selectedModel = selectedModelId
+                        ? models.find((m) => m.id === selectedModelId)
+                        : null;
                       return (
                         <div className="space-y-2">
-                          {models.length > 1 && dims && (
+                          {dims && models.length > 0 && (
                             <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                onClick={() =>
+                                  setPostModel((prev) => {
+                                    const updated = { ...prev };
+                                    delete updated[post.id];
+                                    return updated;
+                                  })
+                                }
+                                className={`text-[10px] px-2 py-1 rounded-md border transition-colors ${
+                                  !selectedModelId
+                                    ? "bg-primary text-primary-foreground border-primary"
+                                    : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                                }`}
+                              >
+                                Auto
+                              </button>
                               {models.map((m) => (
                                 <button
                                   key={m.id}
@@ -1094,7 +1160,7 @@ export function QueueView() {
                                     }))
                                   }
                                   className={`text-[10px] px-2 py-1 rounded-md border transition-colors ${
-                                    (selectedModelId || models[0]?.id) === m.id
+                                    selectedModelId === m.id
                                       ? "bg-primary text-primary-foreground border-primary"
                                       : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
                                   }`}
@@ -1109,12 +1175,19 @@ export function QueueView() {
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               <span>👍 {post.score}</span>
                               <span>💬 {post.num_comments}</span>
-                              {selectedModel && (
+                              {selectedModel ? (
                                 <Badge
                                   variant="outline"
                                   className="text-[9px] px-1 py-0 font-mono"
                                 >
                                   {selectedModel.price}
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] px-1 py-0 font-mono text-blue-500 border-blue-300"
+                                >
+                                  Auto
                                 </Badge>
                               )}
                             </div>
