@@ -17,17 +17,18 @@ import {
   Wand2,
   Loader2,
   Save,
-  Eye,
-  EyeOff,
   CheckCircle,
   XCircle,
-  Image as ImageIcon,
   AlertTriangle,
   ShieldCheck,
   Copy,
   ClipboardCheck,
+  ExternalLink,
+  History,
+  Sparkles,
 } from "lucide-react";
 import Image from "next/image";
+import { ImageCompare } from "@/components/image-compare";
 import { useImageViewer } from "./image-viewer";
 
 // Local Browser Save Utility
@@ -401,6 +402,7 @@ interface EditorItem {
   modelOverride?: string | null;
   editCategory?: string | null;
   hasFaceEdit?: boolean;
+  aiPolicy?: "ai_ok" | "no_ai" | "unknown";
   timestamp: string;
 }
 
@@ -440,6 +442,8 @@ interface EditResult {
   method?: string;
   hasImageData?: boolean;
   generatedImages?: string[];
+  cloudinaryUrl?: string;
+  cloudinaryPublicId?: string;
   qualityCheck?: QualityCheck | null;
   geminiOutputSize?: string;
   geminiAspectRatio?: string;
@@ -452,13 +456,25 @@ export function EditorView() {
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editResult, setEditResult] = useState<EditResult | null>(null);
-  const [comparisonMode, setComparisonMode] = useState<
-    "side-by-side" | "overlay"
-  >("side-by-side");
-  const [showOriginal, setShowOriginal] = useState(true);
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  // Sharp corrections state
+  const [correctionsEnabled, setCorrectionsEnabled] = useState(false);
+  const [correctionPreview, setCorrectionPreview] = useState<{
+    correctedImageUrl?: string;
+    analysis: {
+      summary: string;
+      hints: string[];
+      metrics: Record<string, number>;
+    };
+    applied: string[];
+    hasCorrections: boolean;
+  } | null>(null);
+  const [correctionsLoading, setCorrectionsLoading] = useState(false);
   const { showImage } = useImageViewer();
 
   // Generate watermarked preview whenever a new editResult is ready
@@ -471,6 +487,21 @@ export function EditorView() {
       console.error("Watermark generation failed:", err);
       setWatermarkedUrl(null);
     }
+  }, []);
+
+  // Fetch edit history from Cloudinary
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await authedFetch("/api/history?limit=50");
+      const data = await res.json();
+      if (data.ok) {
+        setHistoryItems(data.items || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
+    }
+    setHistoryLoading(false);
   }, []);
 
   // Load pending item and user credits from localStorage when component mounts
@@ -526,6 +557,30 @@ export function EditorView() {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
+  // Preview sharp corrections
+  const previewCorrections = async () => {
+    if (!currentItem) return;
+    setCorrectionsLoading(true);
+    setCorrectionPreview(null);
+    try {
+      const res = await authedFetch("/api/preview-corrections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: currentItem.post.imageUrl }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCorrectionPreview(data);
+        if (data.hasCorrections) {
+          setCorrectionsEnabled(true);
+        }
+      }
+    } catch (err) {
+      console.error("Preview corrections failed:", err);
+    }
+    setCorrectionsLoading(false);
+  };
+
   // Generate edited image
   const generateEditedImage = async () => {
     if (!currentItem || !editPrompt.trim()) return;
@@ -549,6 +604,11 @@ export function EditorView() {
           modelOverride: currentItem.modelOverride || null,
           editCategory: currentItem.editCategory || null,
           hasFaceEdit: currentItem.hasFaceEdit ?? false,
+          aiPolicy: currentItem.aiPolicy || "unknown",
+          author: currentItem.post.author || "unknown",
+          postId: currentItem.post.id || "unknown",
+          applyCorrections:
+            correctionsEnabled && correctionPreview?.hasCorrections,
         }),
       });
 
@@ -582,6 +642,8 @@ export function EditorView() {
           method: result.method || "unknown",
           hasImageData: result.hasImageData || false,
           generatedImages: result.generatedImages || [],
+          cloudinaryUrl: result.cloudinaryUrl || undefined,
+          cloudinaryPublicId: result.cloudinaryPublicId || undefined,
           qualityCheck: result.qualityCheck || null,
           geminiOutputSize: result.geminiOutputSize || null,
           geminiAspectRatio: result.geminiAspectRatio || null,
@@ -632,6 +694,7 @@ export function EditorView() {
       id: `history_${Date.now()}`,
       postId: result.postId,
       postTitle: currentItem?.post?.title || "Generated Image",
+      author: currentItem?.post?.author || "unknown",
       requestText:
         currentItem?.post?.description || result.analysis || "AI Generated",
       analysis: result.analysis,
@@ -640,6 +703,8 @@ export function EditorView() {
       editedImageUrl: result.generatedImages?.[0] || result.editedContent || "",
       editedContent: result.editedContent,
       generatedImages: result.generatedImages || [],
+      cloudinaryUrl: result.cloudinaryUrl || null,
+      cloudinaryPublicId: result.cloudinaryPublicId || null,
       postUrl: currentItem?.post?.postUrl || "",
       method: result.method || "fal_ai",
       status: "completed" as const,
@@ -728,6 +793,31 @@ export function EditorView() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Download via proxy — fetches image server-side and streams as attachment
+  // Avoids slow fal.ai storage redirects
+  const proxyDownload = async (imageUrl: string, filename: string) => {
+    try {
+      const token = localStorage.getItem("app_token") || "";
+      const params = new URLSearchParams({ url: imageUrl, name: filename });
+      const res = await fetch(`/api/download?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error("Proxy download failed, falling back to direct:", err);
+      handleDownload(imageUrl, filename);
+    }
   };
 
   return (
@@ -868,6 +958,16 @@ export function EditorView() {
                       👤 Face-Safe
                     </span>
                   )}
+                  {currentItem.aiPolicy === "no_ai" && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                      🚫 NO AI
+                    </span>
+                  )}
+                  {currentItem.aiPolicy === "ai_ok" && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20">
+                      ✅ AI OK
+                    </span>
+                  )}
                 </div>
               )}
               <textarea
@@ -878,6 +978,125 @@ export function EditorView() {
                 placeholder="Enter your edit instructions..."
               />
             </CardContent>
+          </Card>
+
+          {/* Sharp Corrections */}
+          <Card className="shadow-lg border-muted/20">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center space-x-2 text-sm">
+                  <Sparkles className="h-4 w-4 text-amber-500" />
+                  <span>Image Corrections (Sharp)</span>
+                </CardTitle>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={previewCorrections}
+                  disabled={correctionsLoading || !currentItem}
+                  className="text-xs"
+                >
+                  {correctionsLoading ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>Preview Corrections</>
+                  )}
+                </Button>
+              </div>
+              <CardDescription className="text-xs">
+                Deterministic fixes (exposure, contrast, color, sharpness)
+                applied before AI — no resolution or quality loss.
+              </CardDescription>
+            </CardHeader>
+            {correctionPreview && (
+              <CardContent className="space-y-3">
+                {!correctionPreview.hasCorrections ? (
+                  <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                    <CheckCircle className="h-4 w-4" />
+                    Image quality OK — no corrections needed.
+                  </div>
+                ) : (
+                  <>
+                    {/* Toggle */}
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={correctionsEnabled}
+                        onClick={() =>
+                          setCorrectionsEnabled(!correctionsEnabled)
+                        }
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          correctionsEnabled
+                            ? "bg-amber-500"
+                            : "bg-muted-foreground/30"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            correctionsEnabled
+                              ? "translate-x-6"
+                              : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                      <span className="text-sm font-medium">
+                        {correctionsEnabled
+                          ? "Corrections ON — corrected image will be sent to AI"
+                          : "Corrections OFF — original image will be sent to AI"}
+                      </span>
+                    </label>
+
+                    {/* Applied corrections list */}
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-1.5">
+                      <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                        {correctionPreview.applied.length} correction
+                        {correctionPreview.applied.length !== 1 ? "s" : ""}{" "}
+                        detected:
+                      </p>
+                      <ul className="text-xs text-muted-foreground space-y-0.5">
+                        {correctionPreview.applied.map((c, i) => (
+                          <li key={i}>• {c}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {/* Before/After comparison */}
+                    {correctionPreview.correctedImageUrl && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Drag slider to compare original vs corrected:
+                        </p>
+                        <ImageCompare
+                          originalSrc={currentItem.post.imageUrl}
+                          editedSrc={correctionPreview.correctedImageUrl}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+
+                    {/* Metrics */}
+                    <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                      {Object.entries(correctionPreview.analysis.metrics).map(
+                        ([k, v]) => (
+                          <span
+                            key={k}
+                            className="px-1.5 py-0.5 rounded bg-muted/50 font-mono"
+                          >
+                            {k}:{" "}
+                            {typeof v === "number"
+                              ? Math.round(v * 100) / 100
+                              : v}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            )}
           </Card>
 
           {/* Generate Button */}
@@ -897,6 +1116,14 @@ export function EditorView() {
                 <>
                   <Wand2 className="mr-3 h-5 w-5" />
                   Generate Edited Image
+                  {correctionsEnabled && correctionPreview?.hasCorrections && (
+                    <Badge
+                      variant="secondary"
+                      className="ml-2 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                    >
+                      + Corrections
+                    </Badge>
+                  )}
                 </>
               )}
             </Button>
@@ -1089,255 +1316,59 @@ export function EditorView() {
               </div>
             )}
 
-            {/* Comparison Mode Toggle */}
-            <div className="flex justify-center">
-              <div className="flex bg-muted p-1 rounded-lg border shadow-sm">
-                <Button
-                  variant={
-                    comparisonMode === "side-by-side" ? "default" : "ghost"
-                  }
-                  size="sm"
-                  onClick={() => setComparisonMode("side-by-side")}
-                  className={`rounded-md transition-all duration-200 font-medium ${
-                    comparisonMode === "side-by-side"
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-                  }`}
-                >
-                  Side by Side
-                </Button>
-                <Button
-                  variant={comparisonMode === "overlay" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setComparisonMode("overlay")}
-                  className={`rounded-md transition-all duration-200 font-medium ${
-                    comparisonMode === "overlay"
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-                  }`}
-                >
-                  Overlay
-                </Button>
-              </div>
-            </div>
-
-            {comparisonMode === "side-by-side" ? (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Original Image */}
+            {/* Comparison Slider + Download Buttons */}
+            {(() => {
+              const editedUrl =
+                editResult.generatedImages?.[0] || editResult.editedContent;
+              const originalUrl = currentItem?.post.imageUrl || "";
+              const editedThumb = editResult.cloudinaryUrl
+                ? editResult.cloudinaryUrl.replace(
+                    "/upload/",
+                    "/upload/w_800,q_auto/",
+                  )
+                : undefined;
+              return (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-foreground flex items-center space-x-2">
-                      <ImageIcon className="h-4 w-4 text-primary" />
-                      <span>Original Image</span>
-                    </h3>
-                    {currentItem && (
+                  {/* Download buttons */}
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
                       <Button
                         size="sm"
                         variant="outline"
+                        className="border-muted-foreground/20 hover:bg-muted/50"
                         onClick={() =>
-                          handleDownload(
-                            currentItem.post.imageUrl,
-                            "original.jpg",
-                          )
+                          proxyDownload(originalUrl, "original.png")
                         }
-                        className="border-muted-foreground/20 hover:bg-muted/50 transition-all duration-200"
                       >
                         <Download className="mr-2 h-4 w-4" />
-                        Download
+                        Original
                       </Button>
-                    )}
-                  </div>
-                  <div
-                    className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() =>
-                      currentItem &&
-                      showImage(
-                        currentItem.post.imageUrl,
-                        "Original Image",
-                        currentItem.post.imageUrl,
-                      )
-                    }
-                  >
-                    {currentItem && (
-                      <>
-                        <Image
-                          src={currentItem.post.imageUrl}
-                          alt="Original image"
-                          fill
-                          className="object-contain"
-                          unoptimized={currentItem.post.imageUrl?.startsWith(
-                            "data:",
-                          )}
-                        />
-                        <DimensionsBadge src={currentItem.post.imageUrl} />
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Edited Image */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-foreground flex items-center space-x-2">
-                      <Wand2 className="h-4 w-4 text-primary" />
-                      <span>AI-Edited Image</span>
-                    </h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="border-muted-foreground/20 hover:bg-muted/50 transition-all duration-200"
-                      onClick={() =>
-                        handleDownload(
-                          editResult.generatedImages?.[0] ||
-                            editResult.editedContent,
-                          "ai-edited.jpg",
-                        )
-                      }
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </Button>
-                  </div>
-
-                  {editResult.generatedImages &&
-                  editResult.generatedImages.length > 0 ? (
-                    <div className="space-y-4">
-                      {editResult.generatedImages.map((imageUrl, index) => (
-                        <div
-                          key={index}
-                          className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() =>
-                            showImage(
-                              imageUrl,
-                              `AI Edited Image ${index + 1}`,
-                              imageUrl,
-                            )
-                          }
-                        >
-                          <Image
-                            src={imageUrl}
-                            alt={`AI-generated edited image ${index + 1}`}
-                            fill
-                            className="object-contain"
-                            unoptimized
-                          />
-                          <DimensionsBadge src={imageUrl} />
-                        </div>
-                      ))}
-                      <div className="text-center">
-                        <p className="text-xs text-green-600">
-                          ✨ AI-generated images with SynthID watermarks
-                        </p>
-                      </div>
-                    </div>
-                  ) : editResult.editedContent.includes("data:image") ||
-                    editResult.editedContent.startsWith("http") ? (
-                    <div
-                      className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
-                      onClick={() => {
-                        const imgSrc = editResult.editedContent.includes(
-                          "data:image",
-                        )
-                          ? editResult.editedContent.match(
-                              /data:image[^"']+/,
-                            )?.[0] || ""
-                          : editResult.editedContent;
-                        showImage(imgSrc, "AI Edited Image", imgSrc);
-                      }}
-                    >
-                      <Image
-                        src={
-                          editResult.editedContent.includes("data:image")
-                            ? editResult.editedContent.match(
-                                /data:image[^"']+/,
-                              )?.[0] || ""
-                            : editResult.editedContent
+                      <Button
+                        size="sm"
+                        className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white"
+                        onClick={() =>
+                          proxyDownload(editedUrl, "ai-edited.png")
                         }
-                        alt="AI-generated edited image"
-                        fill
-                        className="object-contain"
-                        unoptimized
-                      />
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        AI Edited
+                      </Button>
                     </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      <p className="text-sm text-muted-foreground">
-                        Image generated successfully! Check the download link
-                        above.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              /* Overlay Mode */
-              <div className="space-y-4">
-                <div className="flex items-center justify-center space-x-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowOriginal(!showOriginal)}
-                  >
-                    {showOriginal ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </Button>
-                  <span className="text-sm">
-                    {showOriginal ? "Showing Original" : "Showing Edited"}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      handleDownload(
-                        showOriginal
-                          ? currentItem?.post.imageUrl || ""
-                          : editResult.generatedImages?.[0] ||
-                              editResult.editedContent,
-                        showOriginal ? "original.jpg" : "ai-edited.jpg",
-                      )
-                    }
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download Current
-                  </Button>
-                </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Drag the slider to compare
+                    </p>
+                  </div>
 
-                <div
-                  className="relative aspect-video overflow-hidden rounded-lg border bg-black/5 cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => {
-                    const imageSrc = showOriginal
-                      ? currentItem?.post.imageUrl || ""
-                      : editResult.generatedImages?.[0] ||
-                        editResult.editedContent;
-                    const imageAlt = showOriginal
-                      ? "Original Image"
-                      : "AI Edited Image";
-                    const downloadUrl = showOriginal
-                      ? currentItem?.post.imageUrl || ""
-                      : editResult.generatedImages?.[0] ||
-                        editResult.editedContent;
-
-                    showImage(imageSrc, imageAlt, downloadUrl);
-                  }}
-                >
-                  <Image
-                    src={
-                      showOriginal
-                        ? currentItem?.post.imageUrl || ""
-                        : editResult.generatedImages?.[0] ||
-                          editResult.editedContent
-                    }
-                    alt="Comparison image"
-                    fill
-                    className="object-contain"
-                    unoptimized={!showOriginal}
+                  {/* Before/After slider */}
+                  <ImageCompare
+                    originalSrc={originalUrl}
+                    editedSrc={editedUrl}
+                    editedThumbSrc={editedThumb}
+                    className="w-full"
                   />
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Edit Details */}
             <Card className="bg-card/80 backdrop-blur-sm border-muted/20 shadow-lg">
@@ -1369,6 +1400,20 @@ export function EditorView() {
                     <span className="font-medium">
                       {editResult.generatedImages.length}
                     </span>
+                  </div>
+                )}
+                {editResult.cloudinaryUrl && (
+                  <div className="flex justify-between items-center">
+                    <span>Cloudinary:</span>
+                    <a
+                      href={editResult.cloudinaryUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-medium text-blue-500 hover:text-blue-400 underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Permanent Link
+                    </a>
                   </div>
                 )}
               </CardContent>
@@ -1506,6 +1551,112 @@ export function EditorView() {
           </CardContent>
         </Card>
       )}
+
+      {/* Edit History from Cloudinary */}
+      <Card className="border-muted-foreground/20">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <History className="h-4 w-4" />
+              Edit History
+            </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setShowHistory(!showHistory);
+                if (!showHistory && historyItems.length === 0) fetchHistory();
+              }}
+            >
+              {showHistory ? "Hide" : "Show"}
+            </Button>
+          </div>
+        </CardHeader>
+        {showHistory && (
+          <CardContent>
+            {historyLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">
+                  Loading history...
+                </span>
+              </div>
+            ) : historyItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">
+                No edit history yet. Completed edits will appear here.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {historyItems.map((item) => (
+                  <div
+                    key={item.publicId}
+                    className="group relative rounded-lg border overflow-hidden bg-card hover:border-primary/40 transition-all cursor-pointer"
+                    onClick={() =>
+                      showImage(
+                        item.url,
+                        `${item.author} — ${item.postId}`,
+                        item.url,
+                      )
+                    }
+                  >
+                    <div className="aspect-square relative">
+                      <Image
+                        src={item.url}
+                        alt={`Edit for ${item.author}`}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    </div>
+                    <div className="p-2 space-y-1">
+                      <p className="text-xs font-medium truncate">
+                        u/{item.author}
+                      </p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-muted-foreground">
+                          {item.category || "edit"}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      {item.model && (
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          {item.model}
+                        </p>
+                      )}
+                    </div>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 rounded p-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3 text-white" />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+            {historyItems.length > 0 && (
+              <div className="mt-3 text-center">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={fetchHistory}
+                  disabled={historyLoading}
+                >
+                  {historyLoading ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : null}
+                  Refresh
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
     </div>
   );
 }

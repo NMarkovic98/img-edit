@@ -13,6 +13,11 @@ export interface RedditPost {
 }
 
 // ---------------------------------------------------------------------------
+// AI Policy — extracted from Reddit post flair
+// ---------------------------------------------------------------------------
+export type AiPolicy = "ai_ok" | "no_ai" | "unknown";
+
+// ---------------------------------------------------------------------------
 // Edit Categories — drives automatic model selection
 // ---------------------------------------------------------------------------
 export type EditCategory =

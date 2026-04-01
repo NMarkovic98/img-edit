@@ -347,6 +347,25 @@ function processRawPosts(allPosts: any[]) {
       const isPaid =
         flair.includes("paid") || post.title.toLowerCase().includes("[paid]");
 
+      // Detect AI policy from flair
+      const titleLower = post.title.toLowerCase();
+      let aiPolicy: "ai_ok" | "no_ai" | "unknown" = "unknown";
+      if (
+        flair.includes("no ai") ||
+        titleLower.includes("no ai") ||
+        titleLower.includes("[no ai]")
+      ) {
+        aiPolicy = "no_ai";
+      } else if (
+        flair.includes("ai ok") ||
+        flair.includes("ai allowed") ||
+        titleLower.includes("ai ok") ||
+        titleLower.includes("[ai ok]") ||
+        titleLower.includes("[ai]")
+      ) {
+        aiPolicy = "ai_ok";
+      }
+
       return {
         id: post.id,
         title: post.title,
@@ -366,6 +385,7 @@ function processRawPosts(allPosts: any[]) {
         upvote_ratio: post.upvote_ratio,
         flair: post.link_flair_text || null,
         isPaid,
+        aiPolicy,
       };
     });
 }
@@ -531,7 +551,13 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
-    const { title, description, imageUrl, allImages } = await request.json();
+    const {
+      title,
+      description,
+      imageUrl,
+      allImages,
+      aiPolicy: rawAiPolicy,
+    } = await request.json();
 
     if (!imageUrl) {
       return new Response(
@@ -539,6 +565,8 @@ export async function PUT(request: NextRequest) {
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
+
+    const aiPolicy = rawAiPolicy || "unknown";
 
     // Build list of unique image URLs — main first, then references
     const imageUrls: string[] = [imageUrl];
@@ -606,6 +634,13 @@ CATEGORIES (pick ONE):
 
 has_face_edit = true ONLY when the edit directly modifies facial features (skin tone, eyes, face swap, beautify face). Removing a person or changing background = false.`;
 
+    const aiPolicyRule =
+      aiPolicy === "no_ai"
+        ? "\n- CRITICAL — NO AI POLICY: The user explicitly forbids AI-generated looking results. Your prompt must describe the ABSOLUTE MINIMUM change possible. The result MUST look completely natural and unedited. Prefer clone/heal style edits over generative fills."
+        : aiPolicy === "ai_ok"
+          ? "\n- The user allows AI-generated content, but still keep edits minimal and focused only on what was asked."
+          : "";
+
     const analysisPrompt = hasMultipleImages
       ? `Look at the image(s) and the user's request. Write a short editing instruction for an image-editing AI.
 
@@ -621,7 +656,7 @@ STRICT RULES:
 - Do NOT add quality improvements, color corrections, sharpening, or any enhancement.
 - Do NOT mention faces, expressions, lighting, or composition unless the user did.
 - If using a reference, say ONLY what the user wants copied from it.
-- Maximum 1-2 sentences. Shorter is better.
+- Maximum 1-2 sentences. Shorter is better.${aiPolicyRule}
 
 ${LANGUAGE_RULE}
 ${CATEGORY_INSTRUCTION}`
@@ -636,7 +671,7 @@ STRICT RULES:
 - Output ONLY what the user asked for. Nothing extra.
 - Do NOT add quality improvements, color corrections, sharpening, or any enhancement.
 - Do NOT mention faces, expressions, lighting, or composition unless the user did.
-- Maximum 1-2 sentences. Shorter is better.
+- Maximum 1-2 sentences. Shorter is better.${aiPolicyRule}
 
 ${LANGUAGE_RULE}
 ${CATEGORY_INSTRUCTION}`;

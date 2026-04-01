@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QueueView } from "@/components/queue-view";
@@ -12,20 +12,45 @@ import {
   Image,
   Bell,
   BellOff,
-  Volume2,
-  VolumeX,
   LogOut,
-  Radio,
-  Info,
+  History,
+  Sparkles,
+  Loader2,
+  Download,
+  CheckCircle,
+  X,
+  Cloud,
 } from "lucide-react";
+import { ImageCompare } from "@/components/image-compare";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
+import { authedFetch } from "@/lib/api";
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("queue");
   const [pendingEditorItems, setPendingEditorItems] = useState(0);
   const [redditUser, setRedditUser] = useState("");
-  const [showIconInfo, setShowIconInfo] = useState(false);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  // No AI Edit mini-editor
+  const [showNoAiPanel, setShowNoAiPanel] = useState(false);
+  const [noAiUrl, setNoAiUrl] = useState("");
+  const [noAiLoading, setNoAiLoading] = useState(false);
+  const [noAiResult, setNoAiResult] = useState<{
+    correctedImageUrl?: string;
+    analysis: {
+      summary: string;
+      hints: string[];
+      metrics: Record<string, number>;
+    };
+    applied: string[];
+    hasCorrections: boolean;
+  } | null>(null);
+  const [noAiUploading, setNoAiUploading] = useState(false);
+  const [noAiCloudinaryUrl, setNoAiCloudinaryUrl] = useState<string | null>(
+    null,
+  );
   const {
     isSubscribed,
     isSupported,
@@ -38,6 +63,77 @@ export default function Dashboard() {
   } = usePushNotifications();
   const router = useRouter();
 
+  // Master notifications toggle — enables/disables push + sound + monitoring together
+  const allNotificationsOn = isSubscribed && !isMuted && isMonitoring;
+  const toggleAllNotifications = async () => {
+    if (allNotificationsOn) {
+      // Turn everything off
+      if (isSubscribed) await unsubscribe();
+      if (!isMuted) toggleMute();
+      if (isMonitoring) toggleMonitoring();
+    } else {
+      // Turn everything on
+      if (!isSubscribed) await subscribe();
+      if (isMuted) toggleMute();
+      if (!isMonitoring) toggleMonitoring();
+    }
+  };
+
+  // No AI Edit — sharp only
+  const runNoAiEdit = async () => {
+    if (!noAiUrl.trim()) return;
+    setNoAiLoading(true);
+    setNoAiResult(null);
+    setNoAiCloudinaryUrl(null);
+    try {
+      const res = await authedFetch("/api/preview-corrections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: noAiUrl.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) setNoAiResult(data);
+    } catch (err) {
+      console.error("No AI edit failed:", err);
+    }
+    setNoAiLoading(false);
+  };
+
+  const uploadNoAiToCloudinary = async () => {
+    if (!noAiResult?.correctedImageUrl) return;
+    setNoAiUploading(true);
+    try {
+      const res = await authedFetch("/api/upload-correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl: noAiResult.correctedImageUrl,
+          author: redditUser || "unknown",
+        }),
+      });
+      const data = await res.json();
+      if (data.ok && data.url) {
+        setNoAiCloudinaryUrl(data.url);
+      }
+    } catch (err) {
+      console.error("Cloudinary upload failed:", err);
+    }
+    setNoAiUploading(false);
+  };
+
+  // Fetch history
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await authedFetch("/api/history?limit=20");
+      const data = await res.json();
+      if (data.ok) setHistoryItems(data.items || []);
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
+    }
+    setHistoryLoading(false);
+  }, []);
+
   useEffect(() => {
     const user = localStorage.getItem("reddit_username");
     const token = localStorage.getItem("app_token");
@@ -47,7 +143,6 @@ export default function Dashboard() {
     }
     setRedditUser(user);
 
-    // If opened from notification with ?post= param, ensure queue tab is active
     const params = new URLSearchParams(window.location.search);
     if (params.get("post")) {
       setActiveTab("queue");
@@ -95,118 +190,80 @@ export default function Dashboard() {
         <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="container mx-auto px-3 sm:px-4 py-2 sm:py-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 sm:space-x-3">
-                <Wand2 className="h-5 w-5 sm:h-6 sm:w-6 text-primary" />
-                <span className="font-bold text-sm sm:text-lg">Fixtral</span>
-                {redditUser && (
-                  <span className="text-xs text-muted-foreground hidden sm:inline">
-                    u/{redditUser}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center space-x-1">
-                {redditUser && (
-                  <span className="text-xs text-muted-foreground sm:hidden mr-1">
-                    u/{redditUser}
-                  </span>
-                )}
+              {/* Left: username */}
+              <span className="text-sm font-medium text-foreground truncate max-w-[140px] sm:max-w-none">
+                u/{redditUser || "..."}
+              </span>
+
+              {/* Right: actions */}
+              <div className="flex items-center gap-1">
+                {/* Notifications master toggle */}
                 {isSupported && (
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => (isSubscribed ? unsubscribe() : subscribe())}
-                    className="touch-target relative h-9 w-9 p-0"
+                    onClick={toggleAllNotifications}
+                    className="relative h-9 w-9 p-0"
                     title={
-                      isSubscribed
-                        ? "Disable push notifications"
-                        : "Enable push notifications"
+                      allNotificationsOn
+                        ? "Notifications ON (push, sound, monitor) — tap to disable all"
+                        : "Notifications OFF — tap to enable all"
                     }
                   >
-                    {isSubscribed ? (
+                    {allNotificationsOn ? (
                       <Bell className="h-4 w-4 text-green-500" />
                     ) : (
                       <BellOff className="h-4 w-4 text-muted-foreground" />
                     )}
-                    {isSubscribed && (
-                      <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full"></div>
+                    {allNotificationsOn && (
+                      <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
                     )}
                   </Button>
                 )}
+
+                {/* No AI Edit */}
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={toggleMute}
-                  className="touch-target relative h-9 w-9 p-0"
-                  title={
-                    isMuted
-                      ? "Unmute notifications (chime & speech)"
-                      : "Mute notifications (chime & speech)"
-                  }
+                  onClick={() => {
+                    setShowNoAiPanel(!showNoAiPanel);
+                    if (showNoAiPanel) {
+                      setNoAiResult(null);
+                      setNoAiUrl("");
+                      setNoAiCloudinaryUrl(null);
+                    }
+                  }}
+                  className={`relative h-9 w-9 p-0 ${showNoAiPanel ? "bg-amber-500/10" : ""}`}
+                  title="No AI Edit — sharp corrections only"
                 >
-                  {isMuted ? (
-                    <VolumeX className="h-4 w-4 text-red-500" />
-                  ) : (
-                    <Volume2 className="h-4 w-4 text-green-500" />
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleMonitoring}
-                  className="touch-target relative h-9 w-9 p-0"
-                  title={
-                    isMonitoring
-                      ? "Background monitor ON — push notifications even when tab is closed"
-                      : "Background monitor OFF — enable to get push when tab is closed"
-                  }
-                >
-                  <Radio
-                    className={`h-4 w-4 ${isMonitoring ? "text-green-500" : "text-muted-foreground"}`}
+                  <Sparkles
+                    className={`h-4 w-4 ${showNoAiPanel ? "text-amber-500" : "text-muted-foreground"}`}
                   />
-                  {isMonitoring && (
-                    <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                  )}
                 </Button>
+
+                {/* History quick-access */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowHistoryPanel(!showHistoryPanel);
+                    if (!showHistoryPanel && historyItems.length === 0)
+                      fetchHistory();
+                  }}
+                  className="relative h-9 w-9 p-0"
+                  title="Edit history"
+                >
+                  <History className="h-4 w-4 text-muted-foreground" />
+                </Button>
+
                 <ThemeToggle />
-                <div className="relative sm:hidden">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowIconInfo(!showIconInfo)}
-                    className="touch-target h-9 w-9 p-0"
-                    title="What do these icons mean?"
-                  >
-                    <Info className="h-4 w-4 text-muted-foreground" />
-                  </Button>
-                  {showIconInfo && (
-                    <div className="absolute right-0 top-10 z-50 w-56 rounded-lg border bg-popover p-3 shadow-lg text-xs space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Bell className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                        <span>Push notifications on/off</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Volume2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                        <span>Sound notifications on/off</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Radio className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                        <span>Background monitor (push when tab closed)</span>
-                      </div>
-                      <button
-                        onClick={() => setShowIconInfo(false)}
-                        className="text-muted-foreground hover:text-foreground text-[10px] pt-1"
-                      >
-                        Tap to close
-                      </button>
-                    </div>
-                  )}
-                </div>
+
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleLogout}
-                  className="touch-target h-9 w-9 p-0"
-                  title="Change Reddit username"
+                  className="h-9 w-9 p-0"
+                  title="Log out"
                 >
                   <LogOut className="h-4 w-4 text-muted-foreground" />
                 </Button>
@@ -214,6 +271,214 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+
+        {/* No AI Edit panel */}
+        {showNoAiPanel && (
+          <div className="sticky top-[49px] z-30 border-b bg-background/95 backdrop-blur">
+            <div className="container mx-auto px-3 sm:px-4 py-3">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-500" />
+                  No AI Edit — Sharp Only
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowNoAiPanel(false);
+                    setNoAiResult(null);
+                    setNoAiUrl("");
+                    setNoAiCloudinaryUrl(null);
+                  }}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex gap-2 mb-3">
+                <input
+                  type="text"
+                  value={noAiUrl}
+                  onChange={(e) => setNoAiUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && runNoAiEdit()}
+                  placeholder="Paste image URL..."
+                  className="flex-1 px-3 py-2 text-sm border border-input rounded-lg bg-background focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500"
+                />
+                <Button
+                  size="sm"
+                  onClick={runNoAiEdit}
+                  disabled={noAiLoading || !noAiUrl.trim()}
+                  className="bg-amber-500 hover:bg-amber-600 text-white px-4"
+                >
+                  {noAiLoading ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    "Apply"
+                  )}
+                </Button>
+              </div>
+
+              {noAiResult && (
+                <div className="space-y-3">
+                  {!noAiResult.hasCorrections ? (
+                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400 py-4 justify-center">
+                      <CheckCircle className="h-4 w-4" />
+                      Image quality OK — no corrections needed.
+                    </div>
+                  ) : (
+                    <>
+                      {/* Applied corrections */}
+                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                        <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 mb-1.5">
+                          {noAiResult.applied.length} correction
+                          {noAiResult.applied.length !== 1 ? "s" : ""} applied:
+                        </p>
+                        <ul className="text-xs text-muted-foreground space-y-0.5">
+                          {noAiResult.applied.map((c, i) => (
+                            <li key={i}>• {c}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* Before/After slider */}
+                      {noAiResult.correctedImageUrl && (
+                        <div className="space-y-2">
+                          <ImageCompare
+                            originalSrc={noAiUrl}
+                            editedSrc={noAiResult.correctedImageUrl}
+                            className="w-full max-h-[40vh]"
+                          />
+                          <div className="flex gap-2 items-center">
+                            <a
+                              href={noAiResult.correctedImageUrl}
+                              download={`sharp-edit-${Date.now()}.png`}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-colors"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download
+                            </a>
+                            {!noAiCloudinaryUrl ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={uploadNoAiToCloudinary}
+                                disabled={noAiUploading}
+                                className="text-xs h-7"
+                              >
+                                {noAiUploading ? (
+                                  <>
+                                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                    Uploading...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Cloud className="mr-1.5 h-3 w-3" />
+                                    Upload to Cloudinary
+                                  </>
+                                )}
+                              </Button>
+                            ) : (
+                              <a
+                                href={noAiCloudinaryUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition-colors"
+                              >
+                                <Cloud className="h-3.5 w-3.5" />
+                                View on Cloudinary
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Metrics */}
+                      <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+                        {Object.entries(noAiResult.analysis.metrics).map(
+                          ([k, v]) => (
+                            <span
+                              key={k}
+                              className="px-1.5 py-0.5 rounded bg-muted/50 font-mono"
+                            >
+                              {k}:{" "}
+                              {typeof v === "number"
+                                ? Math.round(v * 100) / 100
+                                : v}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* History dropdown panel */}
+        {showHistoryPanel && (
+          <div className="sticky top-[49px] z-30 border-b bg-background/95 backdrop-blur">
+            <div className="container mx-auto px-3 sm:px-4 py-3 max-h-[50vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">Recent Edits</h3>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={fetchHistory}
+                    disabled={historyLoading}
+                    className="text-xs h-7"
+                  >
+                    {historyLoading ? "Loading..." : "Refresh"}
+                  </Button>
+                  <button
+                    onClick={() => setShowHistoryPanel(false)}
+                    className="text-muted-foreground hover:text-foreground text-xs"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              {historyItems.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">
+                  {historyLoading ? "Loading..." : "No edit history yet."}
+                </p>
+              ) : (
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                  {historyItems.map((item) => (
+                    <a
+                      key={item.publicId}
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group rounded-lg border overflow-hidden bg-card hover:border-primary/40 transition-all"
+                    >
+                      <div className="aspect-square relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={item.url}
+                          alt={`Edit for ${item.author}`}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="p-1.5">
+                        <p className="text-[10px] font-medium truncate">
+                          u/{item.author}
+                        </p>
+                        <p className="text-[9px] text-muted-foreground">
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Main Content */}
         <main className="container mx-auto px-3 sm:px-4 py-3 sm:py-6">
@@ -244,11 +509,15 @@ export default function Dashboard() {
               </TabsTrigger>
             </TabsList>
 
-            <div className={`mt-3 sm:mt-4 ${activeTab === "queue" ? "" : "hidden"}`}>
+            <div
+              className={`mt-3 sm:mt-4 ${activeTab === "queue" ? "" : "hidden"}`}
+            >
               <QueueView />
             </div>
 
-            <div className={`mt-3 sm:mt-4 ${activeTab === "editor" ? "" : "hidden"}`}>
+            <div
+              className={`mt-3 sm:mt-4 ${activeTab === "editor" ? "" : "hidden"}`}
+            >
               <EditorView />
             </div>
           </Tabs>

@@ -72,8 +72,33 @@ export function ImageViewer({
     }
   };
 
-  const handleDownload = () => {
-    if (downloadUrl) {
+  const handleDownload = async () => {
+    if (!downloadUrl) return;
+    try {
+      // Try proxy download first for instant save
+      const token =
+        typeof window !== "undefined"
+          ? localStorage.getItem("app_token") || ""
+          : "";
+      const params = new URLSearchParams({
+        url: downloadUrl,
+        name: `fixtral-image-${Date.now()}.png`,
+      });
+      const res = await fetch(`/api/download?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Proxy failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `fixtral-image-${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      // Fallback to direct link
       const link = document.createElement("a");
       link.href = downloadUrl;
       link.download = `fixtral-image-${Date.now()}.png`;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
-import type { EditCategory } from "@/types";
+import type { EditCategory, AiPolicy } from "@/types";
 import { CATEGORY_MODEL_MAP, CATEGORY_LABELS } from "@/types";
 
 interface ImageInput {
@@ -19,6 +19,8 @@ interface ParseRequest {
   imageHeight?: number;
   /** Multiple images — first is main, rest are references */
   images?: ImageInput[];
+  /** AI policy from Reddit flair */
+  aiPolicy?: AiPolicy;
 }
 
 interface PromptEngineResponse {
@@ -236,10 +238,19 @@ export async function POST(request: NextRequest) {
 
     const userText = `${title}${body ? `\n\n${body}` : ""}`;
     const hasMultipleImages = allImages.length > 1;
+    const aiPolicy = reqBody.aiPolicy || "unknown";
 
     const imageContext = hasMultipleImages
       ? "\n\nThe FIRST image is the main image to edit. The other image(s) are reference images provided by the user — use them to understand what the user wants but apply edits ONLY to the first image."
       : "";
+
+    // AI policy context — affects prompt strictness
+    const aiPolicyContext =
+      aiPolicy === "no_ai"
+        ? "\n\nIMPORTANT — NO AI POLICY: The user has tagged this as 'No AI'. Your prompt must describe the ABSOLUTE MINIMUM change. The result must look completely natural and unedited. Do NOT add any extra improvements, enhancements, or changes. Only describe exactly what was requested, nothing more. The edit should be invisible."
+        : aiPolicy === "ai_ok"
+          ? "\n\nNote: The user allows AI-generated content, but still keep edits minimal and focused on what was requested. Do not add unnecessary improvements."
+          : "";
 
     const imageParts = allImages.map((img) => ({
       inlineData: {
@@ -255,7 +266,7 @@ export async function POST(request: NextRequest) {
           role: "user",
           parts: [
             {
-              text: `${SYSTEM_PROMPT}${imageContext}\n\nUser request: "${userText}"`,
+              text: `${SYSTEM_PROMPT}${imageContext}${aiPolicyContext}\n\nUser request: "${userText}"`,
             },
             ...imageParts,
           ],

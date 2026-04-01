@@ -5,7 +5,9 @@ export const maxDuration = 300;
 import { NextRequest, NextResponse } from "next/server";
 import { fal } from "@fal-ai/client";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
-import type { EditCategory } from "@/types";
+import { uploadToCloudinary } from "@/lib/cloudinary";
+import { analyzeImageQuality, applyCorrections } from "@/lib/image-analysis";
+import type { EditCategory, AiPolicy } from "@/types";
 import { CATEGORY_MODEL_MAP, FACE_SAFE_MODELS } from "@/types";
 
 fal.config({
@@ -35,7 +37,7 @@ interface ModelChoice {
   input: Record<string, unknown>;
 }
 
-// --- FLUX Kontext [pro] — best for local edits, face-safe ---
+// --- FLUX Kontext [pro] — $0.04/img, face-safe, ~1024px output, no image_size param ---
 function fluxKontextPro(prompt: string, imageUrl: string): ModelChoice {
   return {
     modelId: "fal-ai/flux-pro/kontext",
@@ -43,11 +45,12 @@ function fluxKontextPro(prompt: string, imageUrl: string): ModelChoice {
     input: {
       prompt,
       image_url: imageUrl,
+      output_format: "png",
     },
   };
 }
 
-// --- FLUX Kontext [max] — premium prompt adherence + typography ---
+// --- FLUX Kontext [max] — $0.08/img, best prompt adherence + typography, ~1024px output ---
 function fluxKontextMax(prompt: string, imageUrl: string): ModelChoice {
   return {
     modelId: "fal-ai/flux-pro/kontext/max",
@@ -55,11 +58,12 @@ function fluxKontextMax(prompt: string, imageUrl: string): ModelChoice {
     input: {
       prompt,
       image_url: imageUrl,
+      output_format: "png",
     },
   };
 }
 
-// --- FLUX.2 [pro] Edit — production-grade photorealism, multi-ref ---
+// --- FLUX.2 [pro] Edit — $0.03/1MP + $0.015/extra MP, multi-ref up to 9 imgs (9MP total) ---
 function flux2Pro(
   prompt: string,
   imageUrls: string[],
@@ -73,15 +77,16 @@ function flux2Pro(
       image_urls: imageUrls,
       image_size: { width: dims.width, height: dims.height },
       num_images: 1,
+      output_format: "png",
     },
   };
 }
 
-// --- Nano Banana 2 (Gemini 3.1 Flash) — compositing king, up to 14 refs ---
+// --- Nano Banana 2 (Gemini 3.1 Flash) — $0.08(1K)/$0.12(2K)/$0.16(4K), up to 14 refs ---
 function nanoBanana2(
   prompt: string,
   imageUrls: string[],
-  resolution: "1K" | "2K" | "4K" = "1K",
+  resolution: "0.5K" | "1K" | "2K" | "4K" = "1K",
 ): ModelChoice {
   return {
     modelId: "fal-ai/nano-banana-2/edit",
@@ -96,7 +101,7 @@ function nanoBanana2(
   };
 }
 
-// --- Nano Banana Pro (Gemini 3 Pro) — deep reasoning, expensive ---
+// --- Nano Banana Pro (Gemini 3 Pro) — $0.15(1K)/$0.30(4K), deep reasoning ---
 function nanoBananaPro(
   prompt: string,
   imageUrls: string[],
@@ -116,20 +121,42 @@ function nanoBananaPro(
   };
 }
 
-// --- Seedream 5.0 Lite — high-res scene editing, cheap ---
-function seedream5Lite(prompt: string, imageUrls: string[]): ModelChoice {
+// --- Seedream 5.0 Lite — $0.035/img, 3.7-9.4MP (2560x1440 to 3072x3072), up to 10 refs ---
+function seedream5Lite(
+  prompt: string,
+  imageUrls: string[],
+  dims: { width: number; height: number },
+): ModelChoice {
+  const MAX_SIDE = 3072;
+  const MAX_PIXELS = 3072 * 3072; // 9.43MP
+  let { width, height } = dims;
+  // Cap to max side
+  const longest = Math.max(width, height);
+  if (longest > MAX_SIDE) {
+    const scale = MAX_SIDE / longest;
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+  // Cap total pixels to 9.43MP
+  const pixels = width * height;
+  if (pixels > MAX_PIXELS) {
+    const scale = Math.sqrt(MAX_PIXELS / pixels);
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
   return {
     modelId: "fal-ai/bytedance/seedream/v5/lite/edit",
     name: "Seedream 5.0 Lite",
     input: {
       prompt,
       image_urls: imageUrls,
+      image_size: { width, height },
       num_images: 1,
     },
   };
 }
 
-// --- Bria RMBG 2.0 — background removal specialist ---
+// --- Bria RMBG 2.0 — $0.018/gen, max 1024x1024, background removal only ---
 function briaBgRemove(imageUrl: string): ModelChoice {
   return {
     modelId: "fal-ai/bria/background/remove",
@@ -140,7 +167,7 @@ function briaBgRemove(imageUrl: string): ModelChoice {
   };
 }
 
-// --- SeedVR2 Upscale — post-edit resolution recovery ---
+// --- SeedVR2 Upscale — $0.001/MP, 2x or 4x scale ---
 function seedvrUpscale(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
   return {
     modelId: "fal-ai/seedvr/upscale/image",
@@ -155,11 +182,12 @@ function seedvrUpscale(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
 // ---------------------------------------------------------------------------
 // Resolution-aware Nano Banana resolution picker
 // ---------------------------------------------------------------------------
-function pickNanaBananaRes(w: number, h: number): "1K" | "2K" | "4K" {
+function pickNanaBananaRes(w: number, h: number): "0.5K" | "1K" | "2K" | "4K" {
   const max = Math.max(w, h);
   if (max >= 3840) return "4K";
   if (max >= 1920) return "2K";
-  return "1K";
+  if (max >= 768) return "1K";
+  return "0.5K";
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +201,8 @@ function buildModelForId(
   dims: { width: number; height: number },
 ): ModelChoice {
   const nbRes = pickNanaBananaRes(dims.width, dims.height);
+  // Nano Banana Pro doesn't support 0.5K — floor to 1K
+  const nbProRes: "1K" | "2K" | "4K" = nbRes === "0.5K" ? "1K" : nbRes;
 
   switch (modelId) {
     case "fal-ai/flux-pro/kontext":
@@ -184,9 +214,9 @@ function buildModelForId(
     case "fal-ai/nano-banana-2/edit":
       return nanoBanana2(prompt, imageUrls, nbRes);
     case "fal-ai/nano-banana-pro/edit":
-      return nanoBananaPro(prompt, imageUrls, nbRes);
+      return nanoBananaPro(prompt, imageUrls, nbProRes);
     case "fal-ai/bytedance/seedream/v5/lite/edit":
-      return seedream5Lite(prompt, imageUrls);
+      return seedream5Lite(prompt, imageUrls, dims);
     case "bria-bg-remove":
       return briaBgRemove(imageUrl);
     default:
@@ -195,6 +225,15 @@ function buildModelForId(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Resolution-aware smart model selector
+// Budget: ≤$0.30/request OK. Pick best model that handles the resolution natively.
+//
+// Resolution routing:
+//   4K+ (≥3840px) → Nano Banana 2/Pro 4K ($0.16/$0.30) or FLUX 2 Pro
+//   2K (1920-3839px) → Nano Banana 2 2K ($0.12), FLUX 2 Pro, or Seedream
+//   1K-FHD (≤1919px) → Kontext Pro/Max ($0.04/$0.08), Seedream ($0.035), NB2 1K ($0.08)
+// ---------------------------------------------------------------------------
 function selectModelsForCategory(
   category: EditCategory,
   hasFaceEdit: boolean,
@@ -203,21 +242,74 @@ function selectModelsForCategory(
   imageUrls: string[],
   dims: { width: number; height: number },
 ): ModelChoice[] {
-  const modelIds = [...CATEGORY_MODEL_MAP[category]];
+  const maxSide = Math.max(dims.width, dims.height);
+  const isHighRes = maxSide >= 1920; // 2K+
+  const is4K = maxSide >= 3840; // 4K+
+  const nbRes = pickNanaBananaRes(dims.width, dims.height);
+  const nbProRes: "1K" | "2K" | "4K" = nbRes === "0.5K" ? "1K" : nbRes;
+
+  // For background removal, always use Bria first
+  if (category === "remove_background") {
+    return [briaBgRemove(imageUrl), fluxKontextPro(prompt, imageUrl)];
+  }
+
+  // Start with category-preferred models from the table
+  const categoryModelIds = [...CATEGORY_MODEL_MAP[category]];
+
+  // For HIGH-RES (2K+): prioritize models that handle resolution natively
+  let modelIds: string[];
+  if (is4K) {
+    // 4K: Only NanoBanana 2/Pro (4K tier) and FLUX 2 Pro can handle this
+    modelIds = [
+      "fal-ai/nano-banana-2/edit", // $0.16 at 4K
+      "fal-ai/flux-2-pro/edit", // ~$0.20 at 12MP
+      "fal-ai/nano-banana-pro/edit", // $0.30 at 4K (fallback, expensive)
+    ];
+    console.log(`[edit] 4K+ image (${maxSide}px) → NB2/FLUX2Pro/NBPro routing`);
+  } else if (isHighRes) {
+    // 2K: NanoBanana 2 (2K=$0.12), FLUX 2 Pro, Seedream are all fine
+    modelIds = [
+      "fal-ai/nano-banana-2/edit", // $0.12 at 2K
+      "fal-ai/flux-2-pro/edit", // ~$0.06 at 2MP
+      "fal-ai/bytedance/seedream/v5/lite/edit", // $0.035 up to 3072px
+    ];
+    console.log(
+      `[edit] 2K image (${maxSide}px) → NB2/FLUX2Pro/Seedream routing`,
+    );
+  } else {
+    // SD/HD/FHD (≤1919px): use cheaper models, category table drives selection
+    modelIds = categoryModelIds;
+    console.log(`[edit] ≤FHD image (${maxSide}px) → category-based routing`);
+  }
+
+  // For high-res, keep category preferences but ensure hi-res capable models come first
+  if (isHighRes) {
+    // Add any category-preferred models that are already high-res capable
+    for (const id of categoryModelIds) {
+      if (
+        !modelIds.includes(id) &&
+        id !== "fal-ai/flux-pro/kontext" &&
+        id !== "fal-ai/flux-pro/kontext/max"
+      ) {
+        modelIds.push(id);
+      }
+    }
+  }
 
   // Face-safe guard: if edit touches faces, filter out unsafe models
-  const safeIds = hasFaceEdit
-    ? modelIds.filter(
-        (id) =>
-          (FACE_SAFE_MODELS as readonly string[]).includes(id) ||
-          id === "bria-bg-remove",
-      )
-    : modelIds;
+  if (hasFaceEdit) {
+    const safeIds = modelIds.filter(
+      (id) =>
+        (FACE_SAFE_MODELS as readonly string[]).includes(id) ||
+        id === "bria-bg-remove",
+    );
+    modelIds = safeIds.length > 0 ? safeIds : ["fal-ai/flux-pro/kontext"];
+  }
 
-  // If all filtered out, use FLUX Kontext Pro as safe default
-  const finalIds = safeIds.length > 0 ? safeIds : ["fal-ai/flux-pro/kontext"];
+  // Deduplicate
+  modelIds = [...new Set(modelIds)];
 
-  return finalIds.map((id) =>
+  return modelIds.map((id) =>
     buildModelForId(id, prompt, imageUrl, imageUrls, dims),
   );
 }
@@ -245,14 +337,12 @@ function resolveOverride(
         imageUrls,
         pickNanaBananaRes(dims.width, dims.height),
       );
-    case "nano-banana-pro":
-      return nanoBananaPro(
-        prompt,
-        imageUrls,
-        pickNanaBananaRes(dims.width, dims.height),
-      );
+    case "nano-banana-pro": {
+      const r = pickNanaBananaRes(dims.width, dims.height);
+      return nanoBananaPro(prompt, imageUrls, r === "0.5K" ? "1K" : r);
+    }
     case "seedream-5-lite":
-      return seedream5Lite(prompt, imageUrls);
+      return seedream5Lite(prompt, imageUrls, dims);
     case "bria-bg-remove":
       return briaBgRemove(imageUrl);
     // Legacy IDs
@@ -266,7 +356,7 @@ function resolveOverride(
       return nanoBananaPro(prompt, imageUrls, "4K");
     case "seedream-2k":
     case "seedream-4k":
-      return seedream5Lite(prompt, imageUrls);
+      return seedream5Lite(prompt, imageUrls, dims);
     default:
       return null;
   }
@@ -447,32 +537,42 @@ export async function POST(request: NextRequest) {
   if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
     const {
-      imageUrl,
+      imageUrl: rawImageUrl,
       changeSummary,
       allImages,
       modelOverride,
       editCategory,
       hasFaceEdit,
+      aiPolicy: rawAiPolicy,
+      author,
+      postId,
+      applyCorrections: shouldCorrect,
     } = await request.json();
 
-    if (!imageUrl || !changeSummary) {
+    if (!rawImageUrl || !changeSummary) {
       return NextResponse.json(
         { error: "Image URL and change summary are required" },
         { status: 400 },
       );
     }
 
+    // imageUrl may be replaced with corrected version below
+    let imageUrl: string = rawImageUrl;
+
     const category: EditCategory = editCategory || "remove_object";
     const faceEdit: boolean = hasFaceEdit ?? false;
+    const aiPolicy: AiPolicy = rawAiPolicy || "unknown";
 
-    console.log(`[edit] Category: ${category} | Face edit: ${faceEdit}`);
+    console.log(
+      `[edit] Category: ${category} | Face edit: ${faceEdit} | AI policy: ${aiPolicy}`,
+    );
     console.log("[edit] Prompt:", changeSummary);
 
     // Build unique image URLs list — main first, then references
     const imageUrls: string[] = [imageUrl];
     if (Array.isArray(allImages)) {
       for (const url of allImages) {
-        if (url && url !== imageUrl && !imageUrls.includes(url)) {
+        if (url && url !== rawImageUrl && !imageUrls.includes(url)) {
           imageUrls.push(url);
         }
       }
@@ -480,15 +580,16 @@ export async function POST(request: NextRequest) {
 
     console.log(`[edit] ${imageUrls.length} image(s)`);
 
-    // Detect main image dimensions
+    // Detect main image dimensions + quality analysis
     let mainDims = { width: 1024, height: 1024 };
+    let imageBuf: Buffer | null = null;
     try {
       const res = await fetch(imageUrl, {
         headers: { "User-Agent": "Mozilla/5.0" },
       });
       if (res.ok) {
-        const buf = Buffer.from(await res.arrayBuffer());
-        mainDims = getImageDimensions(buf);
+        imageBuf = Buffer.from(await res.arrayBuffer());
+        mainDims = getImageDimensions(imageBuf);
       }
     } catch {
       console.warn(
@@ -501,13 +602,80 @@ export async function POST(request: NextRequest) {
       `[edit] Input: ${mainDims.width}x${mainDims.height} → tier: ${tier}`,
     );
 
-    // Build prompt — add preservation instructions
+    // Apply deterministic sharp corrections if requested
+    let correctionApplied = false;
+    if (shouldCorrect && imageBuf) {
+      try {
+        const correction = await applyCorrections(imageBuf);
+        if (correction.applied.length > 0) {
+          console.log(
+            `[edit] Applying ${correction.applied.length} sharp correction(s)`,
+          );
+          // Upload corrected image to Cloudinary as temporary
+          const correctedDataUrl = `data:image/png;base64,${correction.buffer.toString("base64")}`;
+          const correctedUpload = await uploadToCloudinary(correctedDataUrl, {
+            author: author || "unknown",
+            postId: `corrected_${postId || "unknown"}`,
+          });
+          if (correctedUpload?.secure_url) {
+            imageUrl = correctedUpload.secure_url;
+            imageUrls[0] = imageUrl;
+            correctionApplied = true;
+            console.log(`[edit] Using corrected image: ${imageUrl}`);
+          }
+        }
+      } catch (corrErr) {
+        console.warn(
+          "[edit] Sharp corrections failed (non-blocking):",
+          corrErr,
+        );
+      }
+    }
+
+    // Analyze image quality (12 checks: exposure, contrast, saturation, color cast,
+    // dynamic range, highlight/shadow clipping, color temp, tonal compression,
+    // sharpness, noise, vignetting)
+    // Skip for categories where color corrections don't make sense
+    const SKIP_ANALYSIS_CATEGORIES: EditCategory[] = [
+      "remove_background",
+      "text_edit",
+      "creative_fun",
+    ];
+    let qualityHints = "";
+    let analysisMetrics: Record<string, number> | undefined;
+    if (imageBuf && !SKIP_ANALYSIS_CATEGORIES.includes(category)) {
+      const analysis = await analyzeImageQuality(imageBuf);
+      analysisMetrics = analysis.metrics;
+      if (analysis.hints.length > 0) {
+        console.log(`[edit] ${analysis.summary}`);
+        console.log(`[edit] Metrics: ${JSON.stringify(analysis.metrics)}`);
+        // For NO AI: skip quality hints to avoid visible changes
+        if (aiPolicy !== "no_ai") {
+          qualityHints =
+            "\n\nAlso subtly improve the following image quality issues while performing the edit (apply corrections naturally, do not overcorrect): " +
+            analysis.hints.join(" ");
+        }
+      } else {
+        console.log("[edit] Image quality OK — no corrections needed");
+      }
+    }
+
+    // Build prompt — adapt based on AI policy
     const hasReferences = imageUrls.length > 1;
+    const preservationRule =
+      "Do not change any other elements of the image. Do not alter faces, expressions, skin, hair, clothing, background, or any detail not mentioned above.";
+
+    // NO AI policy = extremely strict minimal edits
+    const noAiRule =
+      aiPolicy === "no_ai"
+        ? "\n\nCRITICAL: This image must look completely natural and unedited. Make the ABSOLUTE MINIMUM change possible. The edit must be invisible — no artifacts, no style changes, no color shifts, no visible AI manipulation. Preserve every pixel that doesn't need to change."
+        : "";
+
     let prompt: string;
     if (hasReferences) {
-      prompt = `Edit the FIRST image using the other image(s) as reference.\n\n${changeSummary}\n\nDo not change any other elements of the image. Do not alter faces, expressions, skin, hair, clothing, background, or any detail not mentioned above.`;
+      prompt = `Edit the FIRST image using the other image(s) as reference.\n\n${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
     } else {
-      prompt = `${changeSummary}\n\nDo not change any other elements of the image. Do not alter faces, expressions, skin, hair, clothing, background, or any detail not mentioned above.`;
+      prompt = `${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
     }
 
     // Select models: user override → category-based smart routing
@@ -584,30 +752,51 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[edit] Success via ${usedModel}! Output: ${editedUrl}`);
+    if (editedDims?.width && editedDims?.height) {
+      console.log(
+        `[edit] Output dimensions: ${editedDims.width}x${editedDims.height}`,
+      );
+    }
 
-    // Golden Rule: ensure output resolution >= input resolution
-    const { url: finalUrl, upscaled } = await ensureResolution(
-      editedUrl,
-      editedDims,
-      mainDims,
-    );
-    if (upscaled) {
-      console.log(`[edit] Upscaled to match original resolution`);
-      usedModel += " + SeedVR2 Upscale";
+    // Upload to Cloudinary for permanent storage + history
+    let cloudinaryUrl: string | null = null;
+    let cloudinaryPublicId: string | null = null;
+    try {
+      const cloudResult = await uploadToCloudinary(editedUrl, {
+        author: author || "unknown",
+        postId: postId || "unknown",
+        editCategory: category,
+        model: usedModel,
+        prompt: changeSummary?.slice(0, 200),
+      });
+      if (cloudResult) {
+        cloudinaryUrl = cloudResult.secure_url;
+        cloudinaryPublicId = cloudResult.public_id;
+        console.log(`[edit] Cloudinary: ${cloudinaryUrl}`);
+      }
+    } catch (err) {
+      console.warn("[edit] Cloudinary upload failed (non-blocking):", err);
     }
 
     return NextResponse.json({
       ok: true,
-      edited: finalUrl,
+      edited: editedUrl,
       method: "fal_ai",
       model: usedModel,
       tier,
       category,
       hasFaceEdit: faceEdit,
+      aiPolicy,
       hasImageData: true,
-      generatedImages: [finalUrl],
+      generatedImages: [editedUrl],
+      cloudinaryUrl,
+      cloudinaryPublicId,
+      imageAnalysis: analysisMetrics || undefined,
+      correctionApplied,
       originalDimensions: mainDims,
-      upscaled,
+      outputDimensions: editedDims?.width
+        ? { width: editedDims.width, height: editedDims.height }
+        : undefined,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

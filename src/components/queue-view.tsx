@@ -50,6 +50,7 @@ interface RedditPost {
   subreddit: string;
   flair?: string | null;
   isPaid?: boolean;
+  aiPolicy?: "ai_ok" | "no_ai" | "unknown";
 }
 
 interface AnalysisResult {
@@ -535,6 +536,7 @@ export function QueueView() {
           allImages: post.allImages || [post.imageUrl],
           isGallery: post.isGallery || false,
           imageCount: post.imageCount || 1,
+          aiPolicy: post.aiPolicy || "unknown",
         }),
       });
 
@@ -593,6 +595,7 @@ export function QueueView() {
       modelOverride: postModel[post.id] || null,
       editCategory: editCategory || null,
       hasFaceEdit: hasFaceEdit ?? false,
+      aiPolicy: post.aiPolicy || "unknown",
       timestamp: new Date().toISOString(),
     };
 
@@ -978,6 +981,22 @@ export function QueueView() {
                                 {post.flair}
                               </Badge>
                             )}
+                          {post.aiPolicy === "no_ai" && (
+                            <Badge
+                              variant="destructive"
+                              className="text-[10px] px-1.5 py-0"
+                            >
+                              NO AI
+                            </Badge>
+                          )}
+                          {post.aiPolicy === "ai_ok" && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 border-green-400 text-green-600"
+                            >
+                              AI OK
+                            </Badge>
+                          )}
                           <span className="flex items-center text-muted-foreground">
                             <User className="h-3 w-3 mr-1" />
                             {post.author}
