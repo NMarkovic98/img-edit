@@ -55,7 +55,8 @@ export async function uploadToCloudinary(
   const safeAuthor = meta.author.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50);
   const safePostId = meta.postId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const ts = Date.now();
-  const publicId = `${FOLDER}/${safeAuthor}_${safePostId}_${ts}`;
+  // public_id WITHOUT folder prefix — folder param handles the path
+  const publicId = `${safeAuthor}_${safePostId}_${ts}`;
 
   const timestamp = Math.floor(Date.now() / 1000);
 
@@ -162,24 +163,29 @@ export async function getEditHistory(opts?: {
     "Basic " + Buffer.from(`${API_KEY}:${API_SECRET}`).toString("base64");
 
   try {
-    const params = new URLSearchParams({
+    // Cloudinary Search API requires POST with JSON body
+    const searchBody = {
       expression,
-      sort_by: "created_at",
-      direction: "desc",
-      max_results: String(maxResults),
-    });
-    params.append("with_field", "context");
-    params.append("with_field", "tags");
+      sort_by: [{ created_at: "desc" }],
+      max_results: maxResults,
+      with_field: ["context", "tags"],
+    };
 
     const res = await fetch(
-      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/resources/search?${params}`,
+      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/resources/search`,
       {
-        headers: { Authorization: authHeader },
+        method: "POST",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(searchBody),
       },
     );
 
     if (!res.ok) {
-      console.error("[cloudinary] Search failed:", res.status);
+      const errText = await res.text();
+      console.error("[cloudinary] Search failed:", res.status, errText);
       return [];
     }
 
