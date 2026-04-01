@@ -135,6 +135,21 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    const handleNoAiEdit = (e: Event) => {
+      const url = (e as CustomEvent).detail?.imageUrl;
+      if (url) {
+        setNoAiUrl(url);
+        setNoAiResult(null);
+        setNoAiCloudinaryUrl(null);
+        setShowNoAiPanel(true);
+        setShowHistoryPanel(false);
+      }
+    };
+    window.addEventListener("noAiEdit", handleNoAiEdit);
+    return () => window.removeEventListener("noAiEdit", handleNoAiEdit);
+  }, []);
+
+  useEffect(() => {
     const user = localStorage.getItem("reddit_username");
     const token = localStorage.getItem("app_token");
     if (!user || !token) {

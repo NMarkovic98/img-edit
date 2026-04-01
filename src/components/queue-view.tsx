@@ -29,6 +29,7 @@ import {
   ShieldAlert,
   ChevronLeft,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import Image from "next/image";
 import { useImageViewer } from "./image-viewer";
@@ -1117,24 +1118,41 @@ export function QueueView() {
                                 </Badge>
                               )}
                             </div>
-                            <Button
-                              onClick={() => analyzePost(post.id)}
-                              disabled={analyzingPostId === post.id}
-                              size="sm"
-                              className="bg-blue-500 hover:bg-blue-600"
-                            >
-                              {analyzingPostId === post.id ? (
-                                <>
-                                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                                  Analyzing...
-                                </>
-                              ) : (
-                                <>
-                                  <Wand2 className="mr-2 h-3 w-3" />
-                                  Analyze & Edit
-                                </>
-                              )}
-                            </Button>
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-8 p-0"
+                                title="No AI Edit (Sharp only)"
+                                onClick={() => {
+                                  window.dispatchEvent(
+                                    new CustomEvent("noAiEdit", {
+                                      detail: { imageUrl: post.imageUrl },
+                                    }),
+                                  );
+                                }}
+                              >
+                                <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+                              </Button>
+                              <Button
+                                onClick={() => analyzePost(post.id)}
+                                disabled={analyzingPostId === post.id}
+                                size="sm"
+                                className="bg-blue-500 hover:bg-blue-600"
+                              >
+                                {analyzingPostId === post.id ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                    Analyzing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Wand2 className="mr-2 h-3 w-3" />
+                                    Analyze & Edit
+                                  </>
+                                )}
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       );
