@@ -218,6 +218,19 @@ function seedvrUpscale(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
   };
 }
 
+// --- Aura SR v2 — unblur + super-resolution, $0.01/MP ---
+function auraSR(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
+  return {
+    modelId: "fal-ai/aura-sr",
+    name: `Aura SR (${scale}x)`,
+    input: {
+      image_url: imageUrl,
+      upscaling_factor: scale,
+      output_format: "jpeg",
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Resolution-aware Nano Banana resolution picker
 // ---------------------------------------------------------------------------
@@ -260,6 +273,8 @@ function buildModelForId(
       return seedream5Lite(prompt, imageUrls, dims);
     case "fal-ai/bytedance/seedream/v4.5/edit":
       return seedream45(prompt, imageUrls, dims);
+    case "fal-ai/aura-sr":
+      return auraSR(imageUrl);
     case "bria-bg-remove":
       return briaBgRemove(imageUrl);
     default:
@@ -418,6 +433,8 @@ function resolveOverride(
     case "seedream-2k":
     case "seedream-4k":
       return seedream5Lite(prompt, imageUrls, dims);
+    case "aura-sr":
+      return auraSR(imageUrl);
     default:
       return null;
   }

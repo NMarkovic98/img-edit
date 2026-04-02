@@ -162,6 +162,14 @@ function getModelOptions(w: number, h: number, isPaid = false): ModelOption[] {
     tier: "Util",
   });
 
+  // Unblur / super-resolution — always available
+  models.push({
+    id: "aura-sr",
+    name: "Aura SR (Unblur)",
+    price: "~$0.01/MP",
+    tier: "Util",
+  });
+
   return models;
 }
 
