@@ -45,7 +45,7 @@ function fluxKontextPro(prompt: string, imageUrl: string): ModelChoice {
     input: {
       prompt,
       image_url: imageUrl,
-      output_format: "png",
+      output_format: "jpeg",
     },
   };
 }
@@ -58,7 +58,7 @@ function fluxKontextMax(prompt: string, imageUrl: string): ModelChoice {
     input: {
       prompt,
       image_url: imageUrl,
-      output_format: "png",
+      output_format: "jpeg",
     },
   };
 }
@@ -77,7 +77,26 @@ function flux2Pro(
       image_urls: imageUrls,
       image_size: { width: dims.width, height: dims.height },
       num_images: 1,
-      output_format: "png",
+      output_format: "jpeg",
+    },
+  };
+}
+
+// --- FLUX.2 [max] Edit — custom dims, premium quality for >4096 images ---
+function flux2Max(
+  prompt: string,
+  imageUrls: string[],
+  dims: { width: number; height: number },
+): ModelChoice {
+  return {
+    modelId: "fal-ai/flux-2-max/edit",
+    name: "FLUX 2 Max",
+    input: {
+      prompt,
+      image_urls: imageUrls,
+      image_size: { width: dims.width, height: dims.height },
+      num_images: 1,
+      output_format: "jpeg",
     },
   };
 }
@@ -96,7 +115,7 @@ function nanoBanana2(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
-      output_format: "png",
+      output_format: "jpeg",
     },
   };
 }
@@ -115,7 +134,7 @@ function nanoBananaPro(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
-      output_format: "png",
+      output_format: "jpeg",
       safety_tolerance: "6",
     },
   };
@@ -152,6 +171,26 @@ function seedream5Lite(
       image_urls: imageUrls,
       image_size: { width, height },
       num_images: 1,
+      output_format: "jpeg",
+    },
+  };
+}
+
+// --- Seedream 4.5 — $0.04/img, custom dims, for >4096 images ---
+function seedream45(
+  prompt: string,
+  imageUrls: string[],
+  dims: { width: number; height: number },
+): ModelChoice {
+  return {
+    modelId: "fal-ai/bytedance/seedream/v4.5/edit",
+    name: "Seedream 4.5",
+    input: {
+      prompt,
+      image_urls: imageUrls,
+      image_size: { width: dims.width, height: dims.height },
+      num_images: 1,
+      output_format: "jpeg",
     },
   };
 }
@@ -184,9 +223,9 @@ function seedvrUpscale(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
 // ---------------------------------------------------------------------------
 function pickNanaBananaRes(w: number, h: number): "0.5K" | "1K" | "2K" | "4K" {
   const max = Math.max(w, h);
-  if (max >= 3840) return "4K";
-  if (max >= 1920) return "2K";
-  if (max >= 768) return "1K";
+  if (max > 2048) return "4K";
+  if (max > 1024) return "2K";
+  if (max > 512) return "1K";
   return "0.5K";
 }
 
@@ -211,12 +250,16 @@ function buildModelForId(
       return fluxKontextMax(prompt, imageUrl);
     case "fal-ai/flux-2-pro/edit":
       return flux2Pro(prompt, imageUrls, dims);
+    case "fal-ai/flux-2-max/edit":
+      return flux2Max(prompt, imageUrls, dims);
     case "fal-ai/nano-banana-2/edit":
       return nanoBanana2(prompt, imageUrls, nbRes);
     case "fal-ai/nano-banana-pro/edit":
       return nanoBananaPro(prompt, imageUrls, nbProRes);
     case "fal-ai/bytedance/seedream/v5/lite/edit":
       return seedream5Lite(prompt, imageUrls, dims);
+    case "fal-ai/bytedance/seedream/v4.5/edit":
+      return seedream45(prompt, imageUrls, dims);
     case "bria-bg-remove":
       return briaBgRemove(imageUrl);
     default:
@@ -230,9 +273,9 @@ function buildModelForId(
 // Budget: ≤$0.30/request OK. Pick best model that handles the resolution natively.
 //
 // Resolution routing:
-//   4K+ (≥3840px) → Nano Banana 2/Pro 4K ($0.16/$0.30) or FLUX 2 Pro
-//   2K (1920-3839px) → Nano Banana 2 2K ($0.12), FLUX 2 Pro, or Seedream
-//   1K-FHD (≤1919px) → Kontext Pro/Max ($0.04/$0.08), Seedream ($0.035), NB2 1K ($0.08)
+//   ≤2048px (both sides) → Nano Banana Pro 2K
+//   2049–4096px (both sides ≤4096) → Nano Banana Pro 4K + Nano Banana 2 (4K)
+//   >4096px (any side) → FLUX 2 Max + Seedream 4.5 (custom dims, exact output)
 // ---------------------------------------------------------------------------
 function selectModelsForCategory(
   category: EditCategory,
@@ -243,10 +286,6 @@ function selectModelsForCategory(
   dims: { width: number; height: number },
 ): ModelChoice[] {
   const maxSide = Math.max(dims.width, dims.height);
-  const isHighRes = maxSide >= 1920; // 2K+
-  const is4K = maxSide >= 3840; // 4K+
-  const nbRes = pickNanaBananaRes(dims.width, dims.height);
-  const nbProRes: "1K" | "2K" | "4K" = nbRes === "0.5K" ? "1K" : nbRes;
 
   // For background removal, always use Bria first
   if (category === "remove_background") {
@@ -256,62 +295,65 @@ function selectModelsForCategory(
   // Start with category-preferred models from the table
   const categoryModelIds = [...CATEGORY_MODEL_MAP[category]];
 
-  // For HIGH-RES (2K+): prioritize models that handle resolution natively
-  let modelIds: string[];
-  if (is4K) {
-    // 4K: Only NanoBanana 2/Pro (4K tier) and FLUX 2 Pro can handle this
-    modelIds = [
-      "fal-ai/nano-banana-2/edit", // $0.16 at 4K
-      "fal-ai/flux-2-pro/edit", // ~$0.20 at 12MP
-      "fal-ai/nano-banana-pro/edit", // $0.30 at 4K (fallback, expensive)
-    ];
-    console.log(`[edit] 4K+ image (${maxSide}px) → NB2/FLUX2Pro/NBPro routing`);
-  } else if (isHighRes) {
-    // 2K: NanoBanana 2 (2K=$0.12), FLUX 2 Pro, Seedream are all fine
-    modelIds = [
-      "fal-ai/nano-banana-2/edit", // $0.12 at 2K
-      "fal-ai/flux-2-pro/edit", // ~$0.06 at 2MP
-      "fal-ai/bytedance/seedream/v5/lite/edit", // $0.035 up to 3072px
-    ];
-    console.log(
-      `[edit] 2K image (${maxSide}px) → NB2/FLUX2Pro/Seedream routing`,
-    );
-  } else {
-    // SD/HD/FHD (≤1919px): use cheaper models, category table drives selection
-    modelIds = categoryModelIds;
-    console.log(`[edit] ≤FHD image (${maxSide}px) → category-based routing`);
-  }
+  let models: ModelChoice[];
 
-  // For high-res, keep category preferences but ensure hi-res capable models come first
-  if (isHighRes) {
-    // Add any category-preferred models that are already high-res capable
+  if (maxSide > 4096) {
+    // Over 4096 on any side → FLUX 2 Max + Seedream 4.5 with exact custom dimensions
+    console.log(
+      `[edit] >4096 image (${dims.width}x${dims.height}) → FLUX2Max/Seedream4.5 custom dims routing`,
+    );
+    models = [
+      flux2Max(prompt, imageUrls, dims),
+      seedream45(prompt, imageUrls, dims),
+    ];
+  } else if (maxSide > 2048) {
+    // Between 2049-4096 (both sides ≤4096) → NB Pro 4K primary, NB 2 (4K) fallback
+    console.log(
+      `[edit] 2K-4K image (${dims.width}x${dims.height}) → NBPro 4K / NB2 4K routing`,
+    );
+    models = [
+      nanoBananaPro(prompt, imageUrls, "4K"),
+      nanoBanana2(prompt, imageUrls, "4K"),
+    ];
+    // Add compatible category fallbacks (skip low-res-only models)
     for (const id of categoryModelIds) {
       if (
-        !modelIds.includes(id) &&
         id !== "fal-ai/flux-pro/kontext" &&
         id !== "fal-ai/flux-pro/kontext/max"
       ) {
-        modelIds.push(id);
+        const fallback = buildModelForId(id, prompt, imageUrl, imageUrls, dims);
+        if (!models.some((m) => m.modelId === fallback.modelId)) {
+          models.push(fallback);
+        }
+      }
+    }
+  } else {
+    // ≤2048 → Nano Banana Pro 2K primary
+    console.log(
+      `[edit] ≤2K image (${dims.width}x${dims.height}) → NBPro 2K routing`,
+    );
+    models = [nanoBananaPro(prompt, imageUrls, "2K")];
+    // Add category-based fallbacks
+    for (const id of categoryModelIds) {
+      const fallback = buildModelForId(id, prompt, imageUrl, imageUrls, dims);
+      if (!models.some((m) => m.modelId === fallback.modelId)) {
+        models.push(fallback);
       }
     }
   }
 
   // Face-safe guard: if edit touches faces, filter out unsafe models
   if (hasFaceEdit) {
-    const safeIds = modelIds.filter(
-      (id) =>
-        (FACE_SAFE_MODELS as readonly string[]).includes(id) ||
-        id === "bria-bg-remove",
+    const safeModels = models.filter(
+      (m) =>
+        (FACE_SAFE_MODELS as readonly string[]).includes(m.modelId) ||
+        m.modelId === "bria-bg-remove",
     );
-    modelIds = safeIds.length > 0 ? safeIds : ["fal-ai/flux-pro/kontext"];
+    models =
+      safeModels.length > 0 ? safeModels : [fluxKontextPro(prompt, imageUrl)];
   }
 
-  // Deduplicate
-  modelIds = [...new Set(modelIds)];
-
-  return modelIds.map((id) =>
-    buildModelForId(id, prompt, imageUrl, imageUrls, dims),
-  );
+  return models;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +379,18 @@ function resolveOverride(
         imageUrls,
         pickNanaBananaRes(dims.width, dims.height),
       );
+    case "flux-2-max":
+      return flux2Max(prompt, imageUrls, dims);
+    case "seedream-4.5":
+      return seedream45(prompt, imageUrls, dims);
     case "nano-banana-pro": {
+      // NB Pro cannot handle images >4096 on any side
+      if (Math.max(dims.width, dims.height) > 4096) {
+        console.log(
+          "[edit] NB Pro override rejected (>4096), using FLUX 2 Max",
+        );
+        return flux2Max(prompt, imageUrls, dims);
+      }
       const r = pickNanaBananaRes(dims.width, dims.height);
       return nanoBananaPro(prompt, imageUrls, r === "0.5K" ? "1K" : r);
     }
@@ -352,8 +405,16 @@ function resolveOverride(
       return nanoBananaPro(prompt, imageUrls, "1K");
     case "nano-banana-2k":
       return nanoBananaPro(prompt, imageUrls, "2K");
-    case "nano-banana-4k":
+    case "nano-banana-4k": {
+      // NB Pro 4K cannot handle images >4096 on any side
+      if (Math.max(dims.width, dims.height) > 4096) {
+        console.log(
+          "[edit] NB Pro 4K override rejected (>4096), using FLUX 2 Max",
+        );
+        return flux2Max(prompt, imageUrls, dims);
+      }
       return nanoBananaPro(prompt, imageUrls, "4K");
+    }
     case "seedream-2k":
     case "seedream-4k":
       return seedream5Lite(prompt, imageUrls, dims);

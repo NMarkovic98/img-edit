@@ -40,6 +40,7 @@ export const FACE_SAFE_MODELS = [
   "fal-ai/flux-pro/kontext",
   "fal-ai/flux-pro/kontext/max",
   "fal-ai/flux-2-pro/edit",
+  "fal-ai/flux-2-max/edit",
   "fal-ai/nano-banana-pro/edit",
 ] as const;
 

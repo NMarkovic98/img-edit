@@ -152,6 +152,7 @@ export async function POST(request: NextRequest) {
       input: {
         prompt,
         image_url: imageUrl,
+        output_format: "jpeg",
         safety_tolerance: "6",
       } as any,
       logs: true,
