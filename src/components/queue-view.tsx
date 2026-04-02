@@ -107,105 +107,51 @@ function getModelOptions(w: number, h: number, isPaid = false): ModelOption[] {
   const max = Math.max(w, h);
   const megapixels = Math.ceil((w * h) / 1_000_000);
 
-  // Resolution tier
-  const resTier = max >= 3840 ? "4K" : max >= 1920 ? "2K" : "1K";
-
-  // Resolution-dependent pricing
-  const fluxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(2);
-  const nbProPrice = max >= 3840 ? "$0.30" : max >= 1920 ? "$0.15" : "$0.15";
-
-  // Paid posts: only NB Pro + FLUX 2 Pro (best quality models)
-  if (isPaid) {
-    return [
-      {
-        id: "nano-banana-pro",
-        name: `NB Pro ${resTier}`,
-        price: nbProPrice,
-        tier: resTier,
-      },
-      {
-        id: "flux-2-pro",
-        name: `FLUX 2 Pro`,
-        price: `~$${fluxPrice}`,
-        tier: resTier,
-      },
-    ];
-  }
-
-  // Free posts: full model list, resolution-aware
-  const nb2Price = max >= 3840 ? "$0.16" : max >= 1920 ? "$0.12" : "$0.08";
-
   const models: ModelOption[] = [];
 
-  if (max >= 3840) {
+  if (max > 4096) {
+    // >4096 on any side → FLUX 2 Max + Seedream 4.5
+    const flux2MaxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(
+      2,
+    );
     models.push(
       {
-        id: "nano-banana-2",
-        name: `NB2 ${resTier}`,
-        price: nb2Price,
-        tier: "4K",
+        id: "flux-2-max",
+        name: "FLUX 2 Max",
+        price: `~$${flux2MaxPrice}`,
+        tier: ">4K",
       },
       {
-        id: "flux-2-pro",
-        name: "FLUX 2 Pro",
-        price: `~$${fluxPrice}`,
-        tier: "4K",
-      },
-      { id: "nano-banana-pro", name: "NB Pro 4K", price: "$0.30", tier: "4K" },
-      {
-        id: "seedream-5-lite",
-        name: "Seedream 5.0",
-        price: "$0.035",
-        tier: "4K",
+        id: "seedream-4.5",
+        name: "Seedream 4.5",
+        price: "$0.04",
+        tier: ">4K",
       },
     );
-  } else if (max >= 1920) {
+  } else if (max > 2048) {
+    // 2049–4096 → NB Pro 4K + NB 2 (4K)
     models.push(
       {
+        id: "nano-banana-pro",
+        name: "NB Pro 4K",
+        price: "$0.30",
+        tier: "4K",
+      },
+      {
         id: "nano-banana-2",
-        name: `NB2 ${resTier}`,
-        price: nb2Price,
-        tier: "2K",
+        name: "NB2 4K",
+        price: "$0.16",
+        tier: "4K",
       },
-      {
-        id: "flux-2-pro",
-        name: "FLUX 2 Pro",
-        price: `~$${fluxPrice}`,
-        tier: "2K",
-      },
-      {
-        id: "seedream-5-lite",
-        name: "Seedream 5.0",
-        price: "$0.035",
-        tier: "2K",
-      },
-      { id: "nano-banana-pro", name: "NB Pro 2K", price: "$0.15", tier: "2K" },
-      { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "~1K" },
-      { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "~1K" },
     );
   } else {
-    models.push(
-      { id: "kontext-pro", name: "Kontext Pro", price: "$0.04", tier: "1K" },
-      { id: "kontext-max", name: "Kontext Max", price: "$0.08", tier: "1K" },
-      {
-        id: "nano-banana-2",
-        name: `NB2 ${resTier}`,
-        price: nb2Price,
-        tier: "1K",
-      },
-      {
-        id: "flux-2-pro",
-        name: "FLUX 2 Pro",
-        price: `~$${fluxPrice}`,
-        tier: "1K",
-      },
-      {
-        id: "seedream-5-lite",
-        name: "Seedream 5.0",
-        price: "$0.035",
-        tier: "1K",
-      },
-    );
+    // ≤2048 → NB Pro 2K
+    models.push({
+      id: "nano-banana-pro",
+      name: "NB Pro 2K",
+      price: "$0.15",
+      tier: "2K",
+    });
   }
 
   // Background removal — always available
@@ -223,25 +169,31 @@ function getModelOptions(w: number, h: number, isPaid = false): ModelOption[] {
 const CATEGORY_DISPLAY: Record<string, { label: string; model: string }> = {
   remove_object: {
     label: "🗑️ Remove Object/Person",
-    model: "FLUX Kontext Pro",
+    model: "Nano Banana Pro",
   },
   remove_background: { label: "🖼️ Remove Background", model: "Bria RMBG 2.0" },
-  enhance_beautify: { label: "✨ Enhance / Beautify", model: "FLUX 2 Pro" },
-  restore_old_photo: { label: "🔧 Restore Old Photo", model: "Nano Banana 2" },
-  face_swap: { label: "🔄 Face Swap", model: "FLUX Kontext Pro" },
-  add_object: { label: "➕ Add Object", model: "FLUX 2 Pro" },
-  color_correction: { label: "🎨 Color Correction", model: "FLUX Kontext Pro" },
-  scene_change: { label: "🌅 Scene Change", model: "Seedream 5.0 Lite" },
-  creative_fun: { label: "🎭 Creative / Fun", model: "Nano Banana 2" },
-  text_edit: { label: "✏️ Text Edit", model: "FLUX Kontext Max" },
-  composite_multi: { label: "🧩 Combine Photos", model: "Nano Banana 2" },
+  enhance_beautify: {
+    label: "✨ Enhance / Beautify",
+    model: "Nano Banana Pro",
+  },
+  restore_old_photo: {
+    label: "🔧 Restore Old Photo",
+    model: "Nano Banana Pro",
+  },
+  face_swap: { label: "🔄 Face Swap", model: "Nano Banana Pro" },
+  add_object: { label: "➕ Add Object", model: "Nano Banana Pro" },
+  color_correction: { label: "🎨 Color Correction", model: "Nano Banana Pro" },
+  scene_change: { label: "🌅 Scene Change", model: "Nano Banana Pro" },
+  creative_fun: { label: "🎭 Creative / Fun", model: "Nano Banana Pro" },
+  text_edit: { label: "✏️ Text Edit", model: "Nano Banana Pro" },
+  composite_multi: { label: "🧩 Combine Photos", model: "Nano Banana Pro" },
   body_modification: {
     label: "🦴 Body Modification",
-    model: "FLUX Kontext Pro",
+    model: "Nano Banana Pro",
   },
   professional_headshot: {
     label: "📸 Professional Headshot",
-    model: "FLUX 2 Pro",
+    model: "Nano Banana Pro",
   },
 };
 
