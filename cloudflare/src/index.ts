@@ -236,65 +236,27 @@ async function checkReddit(env: Env) {
       return;
     }
 
-    // Separate paid and free — detect paid via flair, title keywords, and currency symbols
-    function isPaidPost(p: any): boolean {
-      const flair = (p.link_flair_text || "").toLowerCase();
-      const titleLower = p.title.toLowerCase();
-      const descLower = (p.selftext || "").toLowerCase();
-      if (flair.includes("paid") || titleLower.includes("[paid]")) return true;
-      // Currency symbols or payment keywords in title/description
-      if (/[\$€£]/.test(p.title) || /[\$€£]/.test(p.selftext || "")) return true;
-      if (titleLower.includes("pay") || titleLower.includes("paid") || titleLower.includes("tip") || titleLower.includes("venmo") || titleLower.includes("paypal")) return true;
-      if (descLower.includes("pay") || descLower.includes("paid") || descLower.includes("venmo") || descLower.includes("paypal")) return true;
-      return false;
-    }
-    const paidPosts = newPosts.filter(isPaidPost);
-    const freePosts = newPosts.filter((p: any) => !isPaidPost(p));
-
     const subs = await getPushSubscriptions(env);
     if (subs.length === 0) return;
 
-    // Send push notifications
-    if (paidPosts.length > 0) {
-      const subreddits = [...new Set(paidPosts.map((p: any) => p.subreddit))];
-      const body = subreddits
-        .map((s) => {
-          const count = paidPosts.filter((p: any) => p.subreddit === s).length;
-          return `${count} in r/${s}`;
-        })
-        .join(", ");
+    // Notify for ALL new posts
+    const subreddits = [...new Set(newPosts.map((p: any) => p.subreddit))];
+    const body = subreddits
+      .map((s) => {
+        const count = newPosts.filter((p: any) => p.subreddit === s).length;
+        return `${count} in r/${s}`;
+      })
+      .join(", ");
 
-      await sendPushToAll(subs, env, {
-        title: `💰 PAID: ${paidPosts.length} new request${paidPosts.length > 1 ? "s" : ""}`,
-        body,
-        tag: "fixtral-paid",
-        url: "/app",
-        postId: paidPosts[0]?.id,
-      });
-    }
+    await sendPushToAll(subs, env, {
+      title: `🖌️ ${newPosts.length} new request${newPosts.length > 1 ? "s" : ""}`,
+      body,
+      tag: "fixtral-new",
+      url: "/app",
+      postId: newPosts[0]?.id,
+    });
 
-    // Also notify for free posts from smaller high-value subs
-    const NOTIFY_ALL_SUBS = new Set(["PhotoshopRequests", "editmyphoto", "estoration"]);
-    const notifiableFreePosts = freePosts.filter((p: any) => NOTIFY_ALL_SUBS.has(p.subreddit));
-    if (notifiableFreePosts.length > 0) {
-      const subreddits = [...new Set(notifiableFreePosts.map((p: any) => p.subreddit))];
-      const body = subreddits
-        .map((s) => {
-          const count = notifiableFreePosts.filter((p: any) => p.subreddit === s).length;
-          return `${count} in r/${s}`;
-        })
-        .join(", ");
-
-      await sendPushToAll(subs, env, {
-        title: `🖌️ ${notifiableFreePosts.length} new request${notifiableFreePosts.length > 1 ? "s" : ""}`,
-        body,
-        tag: "fixtral-free",
-        url: "/app",
-        postId: notifiableFreePosts[0]?.id,
-      });
-    }
-
-    console.log(`Notified: ${paidPosts.length} paid, ${notifiableFreePosts.length} free (${freePosts.length - notifiableFreePosts.length} skipped)`);
+    console.log(`Notified: ${newPosts.length} new posts (${body})`);
   } catch (err) {
     console.error("checkReddit error:", err);
   }

@@ -411,6 +411,7 @@ export function QueueView() {
   const [newPostIds, setNewPostIds] = useState<Set<string>>(new Set());
   const [newPostCount, setNewPostCount] = useState(0);
   const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
   const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
@@ -1003,12 +1004,48 @@ export function QueueView() {
           </div>
         )}
 
+        {/* Search and filter controls */}
+        <div className="flex flex-col sm:flex-row gap-2 mb-4">
+          <input
+            type="text"
+            placeholder="Search posts..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 px-3 py-1.5 text-sm rounded-md border border-input bg-background"
+          />
+          <div className="flex gap-1">
+            {(["all", "paid", "free"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilterPaid(f)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  filterPaid === f
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {f === "all" ? "All" : f === "paid" ? "Paid" : "Free"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:gap-6 md:grid-cols-2 lg:grid-cols-3">
           {posts
             .filter((post) => {
               if (filterPaid === "paid") return post.isPaid;
               if (filterPaid === "free") return !post.isPaid;
               return true;
+            })
+            .filter((post) => {
+              if (!searchQuery.trim()) return true;
+              const q = searchQuery.toLowerCase();
+              return (
+                post.title.toLowerCase().includes(q) ||
+                (post.description || "").toLowerCase().includes(q) ||
+                post.author.toLowerCase().includes(q) ||
+                post.subreddit.toLowerCase().includes(q)
+              );
             })
             .map((post) => {
               const isNew = newPostIds.has(post.id);
