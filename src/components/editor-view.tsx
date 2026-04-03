@@ -339,47 +339,33 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
 
       const w = canvas.width;
       const h = canvas.height;
+      // Diagonal so no straight crop removes it — use the full diagonal length
+      const diag = Math.ceil(Math.sqrt(w * w + h * h));
       const short = Math.min(w, h);
 
-      // ── Diagonal tiled "© preview" watermark ──────────────────────
-      const fontSize = Math.max(14, Math.floor(short * 0.022));
-      ctx.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      const text = "© preview";
-
-      ctx.save();
-      ctx.globalAlpha = 0.13;
-      ctx.translate(w / 2, h / 2);
-      ctx.rotate(-Math.PI / 5); // -36°
-
-      const spacing = fontSize * 6;
-      for (let y = -h * 1.5; y < h * 1.5; y += spacing) {
-        for (let x = -w * 1.5; x < w * 1.5; x += spacing) {
-          ctx.fillStyle = "rgba(0,0,0,0.4)";
-          ctx.fillText(text, x + 1, y + 1);
-          ctx.fillStyle = "rgba(255,255,255,1)";
-          ctx.fillText(text, x, y);
+      // Helper: draw one full-coverage tiled pass at given angle
+      function drawTile(text: string, angle: number, alpha: number, spacing: number, fSize: number) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = `500 ${fSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.translate(w / 2, h / 2);
+        ctx.rotate(angle);
+        // Cover the full rotated diagonal in every direction
+        for (let y = -diag; y < diag; y += spacing) {
+          for (let x = -diag; x < diag; x += spacing) {
+            ctx.fillStyle = "rgba(0,0,0,0.45)";
+            ctx.fillText(text, x + 1.5, y + 1.5);
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            ctx.fillText(text, x, y);
+          }
         }
+        ctx.restore();
       }
-      ctx.restore();
 
-      // ── Bottom-right: subtle "NOT FOR DISTRIBUTION" stamp ──────────
-      const stampSize = Math.max(10, Math.floor(short * 0.015));
-      ctx.save();
-      ctx.globalAlpha = 0.45;
-      ctx.font = `600 ${stampSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      const stamp = "NOT FOR DISTRIBUTION";
-      const sm = ctx.measureText(stamp);
-      const pad = stampSize * 0.6;
-      const sx = w - sm.width - pad * 3;
-      const sy = h - stampSize * 2;
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.beginPath();
-      ctx.roundRect(sx - pad, sy - stampSize * 1.1, sm.width + pad * 2, stampSize * 1.8, stampSize * 0.35);
-      ctx.fill();
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(stamp, sx, sy);
-      ctx.restore();
+      const fs = Math.max(14, Math.floor(short * 0.022));
+      // Two overlapping grids at different angles → impossible to crop clean
+      drawTile("© preview", -Math.PI / 5, 0.12, fs * 6, fs);
+      drawTile("© preview", Math.PI / 7,  0.07, fs * 8, fs * 0.85);
 
       canvas.toBlob(
         (blob) => {

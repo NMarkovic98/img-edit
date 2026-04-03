@@ -3,8 +3,9 @@ export const runtime = "nodejs";
 import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
-const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
-const API_BASE = "https://oauth.reddit.com";
+// In-memory cache — 1 hour TTL
+const iconCache: Record<string, { url: string | null; ts: number }> = {};
+const CACHE_TTL = 60 * 60 * 1000;
 
 async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
@@ -18,74 +19,47 @@ async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
-async function getAccessToken(): Promise<string> {
-  const clientId = process.env.REDDIT_CLIENT_ID?.replace(/"/g, "").trim();
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET?.replace(/"/g, "").trim();
-  const username = process.env.REDDIT_USERNAME?.replace(/"/g, "").trim();
-  const password = process.env.REDDIT_PASSWORD?.replace(/"/g, "");
+async function fetchSubredditIcon(subreddit: string): Promise<string | null> {
+  try {
+    // Use public JSON API — no OAuth needed
+    const res = await proxyFetch(
+      `https://www.reddit.com/r/${subreddit}/about.json?raw_json=1`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      },
+    );
 
-  if (!clientId || !clientSecret || !username || !password) {
-    throw new Error("Reddit credentials missing");
+    if (!res.ok) {
+      console.error(`Subreddit icon fetch ${subreddit}: HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const about = data?.data;
+    if (!about) return null;
+
+    // Try icon fields in priority order (header_img is a banner, not a logo)
+    const candidates: string[] = [
+      about.community_icon,
+      about.icon_img,
+    ].filter(Boolean);
+
+    for (const raw of candidates) {
+      // Reddit encodes &amp; in JSON sometimes
+      const cleaned = raw.replace(/&amp;/g, "&").trim();
+      if (cleaned && cleaned.startsWith("http")) return cleaned;
+    }
+
+    return null;
+  } catch (err) {
+    console.error(`Subreddit icon error ${subreddit}:`, err);
+    return null;
   }
-
-  const userAgent =
-    process.env.REDDIT_USER_AGENT?.replace(/"/g, "").trim() ||
-    "windows:com.varnan.wsbmcp:v1.0.0 (by /u/This_Cancel_5950)";
-
-  const body = new URLSearchParams({
-    grant_type: "password",
-    username,
-    password,
-    scope: "identity,read",
-  }).toString();
-
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const res = await proxyFetch(TOKEN_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${basic}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": userAgent,
-    },
-    body,
-  });
-
-  if (!res.ok) throw new Error(`Token error: ${res.status}`);
-  const json = await res.json();
-  return json.access_token as string;
-}
-
-// In-memory cache so we don't re-fetch on every queue render
-const iconCache: Record<string, { url: string | null; ts: number }> = {};
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-async function fetchSubredditIcon(
-  subreddit: string,
-  token: string,
-): Promise<string | null> {
-  const userAgent =
-    process.env.REDDIT_USER_AGENT ||
-    "windows:com.varnan.wsbmcp:v1.0.0 (by /u/This_Cancel_5950)";
-
-  const res = await proxyFetch(`${API_BASE}/r/${subreddit}/about?raw_json=1`, {
-    headers: {
-      Authorization: `bearer ${token}`,
-      "User-Agent": userAgent,
-    },
-    cache: "no-cache",
-  });
-
-  if (!res.ok) return null;
-  const data = await res.json();
-  const about = data?.data;
-
-  // community_icon is usually the proper high-res icon; icon_img is fallback
-  const raw: string =
-    about?.community_icon || about?.icon_img || "";
-
-  // Reddit encodes & as &amp; in these fields
-  return raw.replace(/&amp;/g, "&").split("?")[0] || null;
 }
 
 export async function GET(req: NextRequest) {
@@ -110,17 +84,12 @@ export async function GET(req: NextRequest) {
   );
 
   if (needed.length > 0) {
-    try {
-      const token = await getAccessToken();
-      await Promise.all(
-        needed.map(async (sub) => {
-          const iconUrl = await fetchSubredditIcon(sub, token);
-          iconCache[sub.toLowerCase()] = { url: iconUrl, ts: now };
-        }),
-      );
-    } catch (err) {
-      console.error("Subreddit icon fetch error:", err);
-    }
+    await Promise.all(
+      needed.map(async (sub) => {
+        const iconUrl = await fetchSubredditIcon(sub);
+        iconCache[sub.toLowerCase()] = { url: iconUrl, ts: now };
+      }),
+    );
   }
 
   const icons: Record<string, string | null> = {};

@@ -98,9 +98,10 @@ function SubredditIcon({
   subreddit: string;
   iconUrl?: string | null;
 }) {
+  const [failed, setFailed] = useState(false);
   const fb = SUBREDDIT_FALLBACK[subreddit.toLowerCase()] ?? { bg: "#6B7280", emoji: "📣" };
 
-  if (iconUrl) {
+  if (iconUrl && !failed) {
     return (
       <img
         src={iconUrl}
@@ -109,16 +110,7 @@ function SubredditIcon({
         width={32}
         height={32}
         className="w-8 h-8 rounded-full shadow-md object-cover select-none border border-white/10"
-        onError={(e) => {
-          // If image fails, swap to emoji fallback
-          const el = e.currentTarget as HTMLImageElement;
-          el.style.display = "none";
-          const parent = el.parentElement;
-          if (parent) {
-            parent.style.background = fb.bg;
-            parent.textContent = fb.emoji;
-          }
-        }}
+        onError={() => setFailed(true)}
       />
     );
   }

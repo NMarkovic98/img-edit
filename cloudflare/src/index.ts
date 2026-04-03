@@ -270,25 +270,7 @@ async function checkReddit(env: Env) {
       });
     }
 
-    if (freePosts.length > 0) {
-      const subreddits = [...new Set(freePosts.map((p: any) => p.subreddit))];
-      const body = subreddits
-        .map((s) => {
-          const count = freePosts.filter((p: any) => p.subreddit === s).length;
-          return `${count} in r/${s}`;
-        })
-        .join(", ");
-
-      await sendPushToAll(subs, env, {
-        title: `${freePosts.length} new free request${freePosts.length > 1 ? "s" : ""}`,
-        body,
-        tag: "fixtral-free",
-        url: "/app",
-        postId: freePosts[0]?.id,
-      });
-    }
-
-    console.log(`Notified: ${paidPosts.length} paid, ${freePosts.length} free`);
+    console.log(`Notified: ${paidPosts.length} paid (${freePosts.length} free skipped)`);
   } catch (err) {
     console.error("checkReddit error:", err);
   }
