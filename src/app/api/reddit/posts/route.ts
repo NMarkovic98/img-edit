@@ -155,37 +155,17 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
 let lastPosts: any[] = [];
 
 // Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
-async function fetchPostsViaAPI(
-  subreddits: string[] = ["PhotoshopRequest"],
-): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
-  const multiSub = subreddits.join("+");
+// Smaller subs get their own fetch so they don't get drowned out by PhotoshopRequest
+const SEPARATE_FETCH_SUBS = new Set(["photoshoprequests", "editmyphoto", "estoration", "picrequests"]);
 
-  // Try OAuth API first (600 req/10min limit vs ~100/min for public)
-  const hasRedditCredentials =
-    process.env.REDDIT_CLIENT_ID &&
-    process.env.REDDIT_CLIENT_SECRET &&
-    process.env.REDDIT_USERNAME &&
-    process.env.REDDIT_PASSWORD;
-
+async function fetchSubredditPosts(sub: string, isOAuth: boolean, token?: string): Promise<any[]> {
   try {
-    let allPosts: any[];
-
-    if (hasRedditCredentials) {
-      console.log(
-        `Fetching via OAuth API: r/${multiSub}/new (${subreddits.length} subreddits)`,
-      );
-      const token = await getAccessToken();
-      const response = await redditGet(
-        `/r/${multiSub}/new?limit=100&raw_json=1`,
-        token,
-      );
-      allPosts = response.data.children.map((child: any) => child.data);
+    if (isOAuth && token) {
+      const response = await redditGet(`/r/${sub}/new?limit=50&raw_json=1`, token);
+      return response.data.children.map((child: any) => child.data);
     } else {
-      console.log(
-        `Fetching from r/${multiSub}/new.json (public API, ${subreddits.length} subreddits)`,
-      );
       const res = await proxyFetch(
-        `https://www.reddit.com/r/${multiSub}/new.json?limit=100&raw_json=1`,
+        `https://www.reddit.com/r/${sub}/new.json?limit=50&raw_json=1`,
         {
           headers: {
             "User-Agent":
@@ -202,42 +182,99 @@ async function fetchPostsViaAPI(
           cache: "no-store",
         },
       );
-
-      if (res.status === 429) {
-        const resetAfter = parseInt(
-          res.headers.get("x-ratelimit-reset") || "60",
-          10,
-        );
-        console.warn(
-          `Rate limited, reset in ${resetAfter}s. Returning last known data.`,
-        );
-        if (lastPosts.length > 0) {
-          const subSet = new Set(subreddits.map((s) => s.toLowerCase()));
-          const filtered = lastPosts.filter((p: any) =>
-            subSet.has((p.subreddit || "").toLowerCase()),
-          );
-          const posts = processRawPosts(filtered);
-          return { posts, rateLimited: true, resetAfter };
-        }
-        return { posts: [], rateLimited: true, resetAfter };
-      }
-
       if (!res.ok) {
-        console.error(`Reddit public API error: ${res.status}`);
-        return lastPosts.length > 0
-          ? { posts: processRawPosts(lastPosts), rateLimited: false }
-          : { posts: [], rateLimited: false };
+        console.error(`Reddit public API error for r/${sub}: ${res.status}`);
+        return [];
       }
-
       const data = await res.json();
-      allPosts = data.data.children.map((child: any) => child.data);
+      return data.data.children.map((child: any) => child.data);
+    }
+  } catch (err) {
+    console.error(`Error fetching r/${sub}:`, err);
+    return [];
+  }
+}
+
+async function fetchPostsViaAPI(
+  subreddits: string[] = ["PhotoshopRequest"],
+): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
+  const hasRedditCredentials =
+    process.env.REDDIT_CLIENT_ID &&
+    process.env.REDDIT_CLIENT_SECRET &&
+    process.env.REDDIT_USERNAME &&
+    process.env.REDDIT_PASSWORD;
+
+  try {
+    let token: string | undefined;
+    if (hasRedditCredentials) {
+      token = await getAccessToken();
+    }
+    const isOAuth = !!token;
+
+    // Split: main sub (PhotoshopRequest) fetched with limit=100, smaller subs fetched separately
+    const mainSubs = subreddits.filter((s) => !SEPARATE_FETCH_SUBS.has(s.toLowerCase()));
+    const separateSubs = subreddits.filter((s) => SEPARATE_FETCH_SUBS.has(s.toLowerCase()));
+
+    // Fetch all in parallel
+    const fetches: Promise<any[]>[] = [];
+
+    if (mainSubs.length > 0) {
+      const mainMulti = mainSubs.join("+");
+      if (isOAuth) {
+        console.log(`Fetching via OAuth API: r/${mainMulti}/new`);
+        fetches.push(
+          redditGet(`/r/${mainMulti}/new?limit=100&raw_json=1`, token!)
+            .then((r) => r.data.children.map((c: any) => c.data))
+            .catch((err) => { console.error(`Main fetch error:`, err); return []; })
+        );
+      } else {
+        console.log(`Fetching from r/${mainMulti}/new.json (public API)`);
+        fetches.push(
+          proxyFetch(`https://www.reddit.com/r/${mainMulti}/new.json?limit=100&raw_json=1`, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+              Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Accept-Encoding": "gzip, deflate, br",
+              Connection: "keep-alive",
+              "Sec-Fetch-Dest": "document",
+              "Sec-Fetch-Mode": "navigate",
+              "Sec-Fetch-Site": "none",
+            },
+            cache: "no-store",
+          }).then(async (res) => {
+            if (res.status === 429) {
+              console.warn(`Rate limited on main fetch`);
+              return [];
+            }
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data.data.children.map((c: any) => c.data);
+          }).catch(() => [])
+        );
+      }
     }
 
-    // Store last successful fetch for rate-limit fallback
-    lastPosts = allPosts;
-    console.log(`Fetched ${allPosts.length} posts from Reddit`);
+    for (const sub of separateSubs) {
+      console.log(`Fetching separately: r/${sub}/new`);
+      fetches.push(fetchSubredditPosts(sub, isOAuth, token));
+    }
 
-    return { posts: processRawPosts(allPosts), rateLimited: false };
+    const results = await Promise.all(fetches);
+    const allPosts = results.flat();
+
+    // Deduplicate by post ID (in case of crossposts appearing in multiple subs)
+    const seen = new Set<string>();
+    const dedupedPosts = allPosts.filter((p) => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+
+    lastPosts = dedupedPosts;
+    console.log(`Fetched ${dedupedPosts.length} total posts (${results.map((r) => r.length).join('+')} per fetch)`);
+
+    return { posts: processRawPosts(dedupedPosts), rateLimited: false };
   } catch (err) {
     console.error("Reddit fetch error:", err);
     return lastPosts.length > 0
@@ -250,9 +287,6 @@ function processRawPosts(allPosts: any[]) {
   const posts = allPosts;
 
   const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
-  // Longer window for smaller subreddits that post less frequently
-  const twentyFourHoursAgo = Date.now() / 1000 - 24 * 60 * 60;
-  const SMALL_SUBS = new Set(["photoshoprequests", "editmyphoto", "picrequests"]);
 
   function getFullResUrl(mediaId: string, metadata: any): string {
     const mimeType = metadata?.m || "image/jpg";
@@ -328,12 +362,20 @@ function processRawPosts(allPosts: any[]) {
       // Also detect imgur album/page links that have preview images
       const hasImgurLink = post.url && post.url.includes("imgur.com") && post.preview?.images?.length > 0;
       const subLower = (post.subreddit || "").toLowerCase();
-      const cutoff = SMALL_SUBS.has(subLower) ? twentyFourHoursAgo : twoHoursAgo;
-      const isRecent = post.created_utc > cutoff;
+      const isRecent = post.created_utc > twoHoursAgo;
       // Skip all filters for high-value smaller subs — show everything
       const NO_FILTER_SUBS = new Set(["photoshoprequests", "editmyphoto", "estoration"]);
       if (NO_FILTER_SUBS.has(subLower)) {
-        if (!(hasImage || isGallery || hasSelfPostImages || hasImgurLink)) return false;
+        // Check crosspost for images too
+        const crosspost = post.crosspost_parent_list?.[0];
+        const crossHasImage = crosspost && (
+          crosspost.url?.includes("i.redd.it") ||
+          crosspost.url?.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
+          crosspost.preview?.images?.length > 0 ||
+          (crosspost.is_gallery && crosspost.media_metadata)
+        );
+        const anyImage = hasImage || isGallery || hasSelfPostImages || hasImgurLink || crossHasImage;
+        if (!anyImage || !isRecent) return false;
         return true;
       }
 

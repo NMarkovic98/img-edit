@@ -410,7 +410,7 @@ export function QueueView() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [newPostIds, setNewPostIds] = useState<Set<string>>(new Set());
   const [newPostCount, setNewPostCount] = useState(0);
-  const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("paid");
+  const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
   const [error, setError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
   const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
@@ -585,21 +585,8 @@ export function QueueView() {
             return true;
           });
 
-          // Sort: newest first, paid posts get a 30-min boost, high-value paid get 1hr boost
-          const HIGH_VALUE_SUBS = new Set(["editmyphoto", "photoshoprequests"]);
-          const PAID_BOOST = 30 * 60; // 30 minutes in seconds
-          const HIGH_PAID_BOOST = 60 * 60; // 1 hour in seconds
-          fetchedPosts.sort((a, b) => {
-            let aTime = a.created_utc;
-            let bTime = b.created_utc;
-            if (a.isPaid) aTime += PAID_BOOST;
-            if (b.isPaid) bTime += PAID_BOOST;
-            if (a.isPaid && HIGH_VALUE_SUBS.has(a.subreddit.toLowerCase()))
-              aTime += HIGH_PAID_BOOST;
-            if (b.isPaid && HIGH_VALUE_SUBS.has(b.subreddit.toLowerCase()))
-              bTime += HIGH_PAID_BOOST;
-            return bTime - aTime;
-          });
+          // Sort: newest first (strictly by time)
+          fetchedPosts.sort((a, b) => b.created_utc - a.created_utc);
 
           setPosts(fetchedPosts);
         }
