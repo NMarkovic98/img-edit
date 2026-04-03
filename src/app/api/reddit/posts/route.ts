@@ -250,6 +250,9 @@ function processRawPosts(allPosts: any[]) {
   const posts = allPosts;
 
   const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
+  // Longer window for smaller subreddits that post less frequently
+  const twentyFourHoursAgo = Date.now() / 1000 - 24 * 60 * 60;
+  const SMALL_SUBS = new Set(["photoshoprequests", "editmyphoto", "picrequests"]);
 
   function getFullResUrl(mediaId: string, metadata: any): string {
     const mimeType = metadata?.m || "image/jpg";
@@ -297,6 +300,14 @@ function processRawPosts(allPosts: any[]) {
     return null;
   }
 
+  // Log per-subreddit counts before filtering
+  const subCounts: Record<string, number> = {};
+  for (const p of posts) {
+    const s = p.subreddit || "unknown";
+    subCounts[s] = (subCounts[s] || 0) + 1;
+  }
+  console.log(`[processRawPosts] Raw posts per subreddit:`, subCounts);
+
   return posts
     .filter((post: any) => {
       const hasImage =
@@ -304,6 +315,7 @@ function processRawPosts(allPosts: any[]) {
         (post.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
           post.url.includes("i.redd.it") ||
           post.url.includes("i.imgur.com") ||
+          post.url.includes("imgur.com") ||
           post.url.includes("redditmedia") ||
           (post.preview &&
             post.preview.images &&
@@ -313,11 +325,26 @@ function processRawPosts(allPosts: any[]) {
         post.is_self &&
         post.media_metadata &&
         Object.keys(post.media_metadata).length > 0;
-      const isRecent = post.created_utc > twoHoursAgo;
-      if (!(hasImage || isGallery || hasSelfPostImages) || !isRecent) return false;
+      // Also detect imgur album/page links that have preview images
+      const hasImgurLink = post.url && post.url.includes("imgur.com") && post.preview?.images?.length > 0;
+      const subLower = (post.subreddit || "").toLowerCase();
+      const cutoff = SMALL_SUBS.has(subLower) ? twentyFourHoursAgo : twoHoursAgo;
+      const isRecent = post.created_utc > cutoff;
+      // Skip all filters for high-value smaller subs — show everything
+      const NO_FILTER_SUBS = new Set(["photoshoprequests", "editmyphoto", "estoration"]);
+      if (NO_FILTER_SUBS.has(subLower)) {
+        if (!(hasImage || isGallery || hasSelfPostImages || hasImgurLink)) return false;
+        return true;
+      }
+
+      if (!(hasImage || isGallery || hasSelfPostImages || hasImgurLink) || !isRecent) {
+        return false;
+      }
       // Skip images that exceed AI model limits
       const dims = getKnownDimensions(post);
-      if (dims && (dims.w > MAX_DIM || dims.h > MAX_DIM)) return false;
+      if (dims && (dims.w > MAX_DIM || dims.h > MAX_DIM)) {
+        return false;
+      }
       return true;
     })
     .map((post: any) => {
