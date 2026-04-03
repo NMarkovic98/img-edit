@@ -82,6 +82,58 @@ const AVAILABLE_SUBREDDITS = [
   { id: "editmyphoto", label: "r/editmyphoto" },
 ];
 
+// Fallback colors per subreddit if icon can't be loaded
+const SUBREDDIT_FALLBACK: Record<string, { bg: string; emoji: string }> = {
+  photoshoprequest:  { bg: "#0078D4", emoji: "🖌️" },
+  photoshoprequests: { bg: "#0078D4", emoji: "🖌️" },
+  editmyphoto:       { bg: "#16A34A", emoji: "📷" },
+  estoration:        { bg: "#B45309", emoji: "🕰️" },
+  picrequests:       { bg: "#7C3AED", emoji: "🖼️" },
+};
+
+function SubredditIcon({
+  subreddit,
+  iconUrl,
+}: {
+  subreddit: string;
+  iconUrl?: string | null;
+}) {
+  const fb = SUBREDDIT_FALLBACK[subreddit.toLowerCase()] ?? { bg: "#6B7280", emoji: "📣" };
+
+  if (iconUrl) {
+    return (
+      <img
+        src={iconUrl}
+        alt={`r/${subreddit}`}
+        title={`r/${subreddit}`}
+        width={32}
+        height={32}
+        className="w-8 h-8 rounded-full shadow-md object-cover select-none border border-white/10"
+        onError={(e) => {
+          // If image fails, swap to emoji fallback
+          const el = e.currentTarget as HTMLImageElement;
+          el.style.display = "none";
+          const parent = el.parentElement;
+          if (parent) {
+            parent.style.background = fb.bg;
+            parent.textContent = fb.emoji;
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center justify-center w-8 h-8 rounded-full text-base shadow-md select-none border border-white/10"
+      style={{ background: fb.bg }}
+      title={`r/${subreddit}`}
+    >
+      {fb.emoji}
+    </div>
+  );
+}
+
 // Format time ago in minutes
 function timeAgo(utc: number): string {
   const now = Date.now() / 1000;
@@ -366,7 +418,7 @@ export function QueueView() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [newPostIds, setNewPostIds] = useState<Set<string>>(new Set());
   const [newPostCount, setNewPostCount] = useState(0);
-  const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
+  const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("paid");
   const [error, setError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
   const [commentedPostIds, setCommentedPostIds] = useState<Set<string>>(
@@ -377,6 +429,7 @@ export function QueueView() {
     Record<string, { w: number; h: number }>
   >({});
   const [postModel, setPostModel] = useState<Record<string, string>>({});
+  const [subredditIcons, setSubredditIcons] = useState<Record<string, string | null>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
   const [highlightPostId, setHighlightPostId] = useState<string | null>(null);
@@ -437,6 +490,28 @@ export function QueueView() {
       setTimeout(() => setHighlightPostId(null), 5000);
     }
   }, [highlightPostId, posts]);
+
+  // Fetch subreddit icons (real Reddit logos) once per subreddit selection
+  useEffect(() => {
+    const missing = selectedSubreddits.filter(
+      (s) => !(s.toLowerCase() in subredditIcons),
+    );
+    if (missing.length === 0) return;
+
+    authedFetch(`/api/reddit/subreddit-icons?subreddits=${missing.join(",")}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          // Normalize keys to lowercase for consistent lookup
+          const normalized: Record<string, string | null> = {};
+          for (const [k, v] of Object.entries(data.icons as Record<string, string | null>)) {
+            normalized[k.toLowerCase()] = v;
+          }
+          setSubredditIcons((prev) => ({ ...prev, ...normalized }));
+        }
+      })
+      .catch(() => {});
+  }, [selectedSubreddits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for global notification events from NotificationProvider
   useEffect(() => {
@@ -964,6 +1039,14 @@ export function QueueView() {
                   id={`post-${post.id}`}
                   className={`overflow-hidden hover:shadow-lg transition-shadow relative ${isNew ? "ring-2 ring-blue-500 ring-offset-2 ring-offset-background" : ""} ${commentedPostIds.has(post.id) ? "border-purple-500/50 border-2" : ""} ${highlightPostId === post.id ? "ring-2 ring-orange-500 ring-offset-2 ring-offset-background animate-pulse" : ""}`}
                 >
+                  {/* Top-left subreddit icon */}
+                  <div className="absolute top-2 left-2 z-10">
+                    <SubredditIcon
+                      subreddit={post.subreddit}
+                      iconUrl={subredditIcons[post.subreddit.toLowerCase()]}
+                    />
+                  </div>
+
                   {/* Top-right badges */}
                   <div className="absolute top-2 right-2 z-10 flex gap-1.5">
                     {commentedPostIds.has(post.id) && (
@@ -980,7 +1063,7 @@ export function QueueView() {
                   </div>
                   <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6 pt-3 sm:pt-6">
                     <div className="flex items-start justify-between">
-                      <div className="space-y-1.5 sm:space-y-2 flex-1 pr-12">
+                      <div className="space-y-1.5 sm:space-y-2 flex-1 pl-10 pr-12">
                         <CardTitle className="text-sm sm:text-lg leading-tight line-clamp-2">
                           {post.title}
                         </CardTitle>

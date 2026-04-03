@@ -337,30 +337,48 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
       // Draw original image at full quality
       ctx.drawImage(img, 0, 0);
 
-      // Watermark settings — scale text relative to image size
-      const fontSize = Math.max(
-        14,
-        Math.floor(Math.min(canvas.width, canvas.height) * 0.025),
-      );
-      ctx.font = `bold ${fontSize}px sans-serif`;
-      const text = "Fixtral — Preview";
+      const w = canvas.width;
+      const h = canvas.height;
+      const short = Math.min(w, h);
 
-      // Semi-transparent diagonal watermark across the image
+      // ── Diagonal tiled "© preview" watermark ──────────────────────
+      const fontSize = Math.max(14, Math.floor(short * 0.022));
+      ctx.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      const text = "© preview";
+
       ctx.save();
-      ctx.globalAlpha = 0.15;
-      ctx.fillStyle = "#ffffff";
-      ctx.strokeStyle = "#000000";
-      ctx.lineWidth = 1;
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(-Math.PI / 6); // -30 degrees
+      ctx.globalAlpha = 0.13;
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(-Math.PI / 5); // -36°
 
-      const spacing = fontSize * 4;
-      for (let y = -canvas.height; y < canvas.height; y += spacing) {
-        for (let x = -canvas.width; x < canvas.width; x += spacing) {
-          ctx.strokeText(text, x, y);
+      const spacing = fontSize * 6;
+      for (let y = -h * 1.5; y < h * 1.5; y += spacing) {
+        for (let x = -w * 1.5; x < w * 1.5; x += spacing) {
+          ctx.fillStyle = "rgba(0,0,0,0.4)";
+          ctx.fillText(text, x + 1, y + 1);
+          ctx.fillStyle = "rgba(255,255,255,1)";
           ctx.fillText(text, x, y);
         }
       }
+      ctx.restore();
+
+      // ── Bottom-right: subtle "NOT FOR DISTRIBUTION" stamp ──────────
+      const stampSize = Math.max(10, Math.floor(short * 0.015));
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.font = `600 ${stampSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      const stamp = "NOT FOR DISTRIBUTION";
+      const sm = ctx.measureText(stamp);
+      const pad = stampSize * 0.6;
+      const sx = w - sm.width - pad * 3;
+      const sy = h - stampSize * 2;
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.beginPath();
+      ctx.roundRect(sx - pad, sy - stampSize * 1.1, sm.width + pad * 2, stampSize * 1.8, stampSize * 0.35);
+      ctx.fill();
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(stamp, sx, sy);
       ctx.restore();
 
       canvas.toBlob(
@@ -519,6 +537,14 @@ export function EditorView() {
         try {
           const pendingItem = JSON.parse(pendingItemStr);
           console.log("EditorView: Parsed pending item:", pendingItem);
+
+          // Clear previous edit state before loading new item
+          setEditResult(null);
+          setCorrectionPreview(null);
+          setWatermarkedUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return null;
+          });
 
           setCurrentItem(pendingItem);
           setEditPrompt(pendingItem.analysis);

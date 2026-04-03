@@ -96,6 +96,14 @@ function generateChimeWav(freq = 880, durationSec = 0.5, volume = 0.7): string {
   return "data:audio/wav;base64," + btoa(binary);
 }
 
+// Subreddits that get priority vibration (3 pulses)
+const PRIORITY_SUBREDDITS = new Set([
+  "photoshoprequest",
+  "photoshoprequests",
+  "editmyphoto",
+  "estoration",
+]);
+
 // Pre-generate chime sounds - PAID is urgent/distinct, FREE is subtle
 const CHIME_PAID = generateChimeWav(1200, 0.8, 1.0); // High pitch, loud, longer
 const CHIME_FREE = generateChimeWav(600, 0.3, 0.5); // Low pitch, quiet, short
@@ -414,7 +422,7 @@ export function NotificationProvider({
             .join(", ");
         };
 
-        // PAID gets urgent notification
+        // PAID gets urgent notification only
         if (paidPosts.length > 0) {
           const msg = buildMessage(paidPosts);
           if (!isMutedRef.current) {
@@ -422,6 +430,16 @@ export function NotificationProvider({
               `${paidPosts.length} PAID request${paidPosts.length > 1 ? "s" : ""}: ${msg}`,
               "paid",
             );
+
+            // Vibrate for priority subreddits (3 pulses)
+            const hasPrioritySub = paidPosts.some((p: any) =>
+              PRIORITY_SUBREDDITS.has((p.subreddit || "").toLowerCase()),
+            );
+            if (hasPrioritySub && "vibrate" in navigator) {
+              navigator.vibrate([300, 150, 300, 150, 300]);
+            } else if ("vibrate" in navigator) {
+              navigator.vibrate([200, 100, 200]);
+            }
           }
 
           // Only send push from frontend if background monitor is off
@@ -438,25 +456,6 @@ export function NotificationProvider({
               detail: { postIds: paidPosts.map((p: any) => p.id) },
             }),
           );
-        }
-
-        // FREE gets subtle notification (only if no paid, otherwise skip voice)
-        if (freePosts.length > 0) {
-          const msg = buildMessage(freePosts);
-          if (paidPosts.length === 0 && !isMutedRef.current) {
-            notify(
-              `${freePosts.length} free request${freePosts.length > 1 ? "s" : ""}: ${msg}`,
-              "free",
-            );
-          }
-
-          // Only send push from frontend if background monitor is off
-          if (paidPosts.length === 0 && !isMonitoringRef.current) {
-            sendPushNotification(
-              `${freePosts.length} new free request${freePosts.length > 1 ? "s" : ""}`,
-              msg,
-            );
-          }
         }
 
         // Mark as seen

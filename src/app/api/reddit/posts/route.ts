@@ -274,6 +274,29 @@ function processRawPosts(allPosts: any[]) {
     return images;
   }
 
+  const MAX_DIM = 4096;
+
+  // Extract known dimensions from Reddit metadata (no extra fetches)
+  function getKnownDimensions(post: any): { w: number; h: number } | null {
+    // Gallery: first image in media_metadata
+    if (post.media_metadata) {
+      const firstId = post.gallery_data?.items?.[0]?.media_id ||
+        Object.keys(post.media_metadata)[0];
+      const meta = post.media_metadata[firstId];
+      if (meta?.s?.x && meta?.s?.y) return { w: meta.s.x, h: meta.s.y };
+    }
+    // Regular post with preview
+    if (post.preview?.images?.[0]?.source) {
+      const src = post.preview.images[0].source;
+      if (src.width && src.height) return { w: src.width, h: src.height };
+    }
+    // Crosspost
+    if (post.crosspost_parent_list?.[0]) {
+      return getKnownDimensions(post.crosspost_parent_list[0]);
+    }
+    return null;
+  }
+
   return posts
     .filter((post: any) => {
       const hasImage =
@@ -291,7 +314,11 @@ function processRawPosts(allPosts: any[]) {
         post.media_metadata &&
         Object.keys(post.media_metadata).length > 0;
       const isRecent = post.created_utc > twoHoursAgo;
-      return (hasImage || isGallery || hasSelfPostImages) && isRecent;
+      if (!(hasImage || isGallery || hasSelfPostImages) || !isRecent) return false;
+      // Skip images that exceed AI model limits
+      const dims = getKnownDimensions(post);
+      if (dims && (dims.w > MAX_DIM || dims.h > MAX_DIM)) return false;
+      return true;
     })
     .map((post: any) => {
       let imageUrl = post.url;
@@ -344,24 +371,42 @@ function processRawPosts(allPosts: any[]) {
       }
 
       const flair = (post.link_flair_text || "").toLowerCase();
-      const isPaid =
-        flair.includes("paid") || post.title.toLowerCase().includes("[paid]");
+      const titleLowerPaid = post.title.toLowerCase();
+      const descLower = (post.selftext || "").toLowerCase();
+      const subredditLower = (post.subreddit || "").toLowerCase();
+      // PhotoshopRequest uses flair reliably; other subreddits need keyword detection
+      const isPhotoshopSub =
+        subredditLower === "photoshoprequest" ||
+        subredditLower === "photoshoprequests";
+      const hasPaidKeyword =
+        titleLowerPaid.includes("pay") ||
+        titleLowerPaid.includes("paid") ||
+        titleLowerPaid.includes("$") ||
+        titleLowerPaid.includes("€") ||
+        titleLowerPaid.includes("£") ||
+        descLower.includes("pay") ||
+        descLower.includes("paid") ||
+        descLower.includes("$") ||
+        descLower.includes("€") ||
+        descLower.includes("£");
+      const isPaid = isPhotoshopSub
+        ? flair.includes("paid") || titleLowerPaid.includes("[paid]")
+        : hasPaidKeyword || flair.includes("paid");
 
       // Detect AI policy from flair
-      const titleLower = post.title.toLowerCase();
       let aiPolicy: "ai_ok" | "no_ai" | "unknown" = "unknown";
       if (
         flair.includes("no ai") ||
-        titleLower.includes("no ai") ||
-        titleLower.includes("[no ai]")
+        titleLowerPaid.includes("no ai") ||
+        titleLowerPaid.includes("[no ai]")
       ) {
         aiPolicy = "no_ai";
       } else if (
         flair.includes("ai ok") ||
         flair.includes("ai allowed") ||
-        titleLower.includes("ai ok") ||
-        titleLower.includes("[ai ok]") ||
-        titleLower.includes("[ai]")
+        titleLowerPaid.includes("ai ok") ||
+        titleLowerPaid.includes("[ai ok]") ||
+        titleLowerPaid.includes("[ai]")
       ) {
         aiPolicy = "ai_ok";
       }
@@ -386,6 +431,7 @@ function processRawPosts(allPosts: any[]) {
         flair: post.link_flair_text || null,
         isPaid,
         aiPolicy,
+        imageDimensions: getKnownDimensions(post),
       };
     });
 }
