@@ -374,7 +374,7 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
           else reject(new Error("Canvas toBlob failed"));
         },
         "image/jpeg",
-        0.92,
+        1.0,
       );
     };
     img.onerror = () => reject(new Error("Failed to load image for watermark"));
