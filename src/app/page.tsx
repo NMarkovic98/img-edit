@@ -9,6 +9,7 @@ export default function LandingPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [paypalLink, setPaypalLink] = useState("");
+  const [botUrl, setBotUrl] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const router = useRouter();
@@ -22,6 +23,8 @@ export default function LandingPage() {
       // Pre-fill paypal link if previously saved
       const savedPaypal = localStorage.getItem("paypal_link");
       if (savedPaypal) setPaypalLink(savedPaypal);
+      const savedBot = localStorage.getItem("bot_url");
+      if (savedBot) setBotUrl(savedBot);
       setLoading(false);
     }
   }, [router]);
@@ -52,6 +55,9 @@ export default function LandingPage() {
     localStorage.setItem("app_token", password.trim());
     if (paypalLink.trim()) {
       localStorage.setItem("paypal_link", paypalLink.trim());
+    }
+    if (botUrl.trim()) {
+      localStorage.setItem("bot_url", botUrl.trim());
     }
     router.push("/app");
   };
@@ -109,6 +115,16 @@ export default function LandingPage() {
               value={paypalLink}
               onChange={(e) => setPaypalLink(e.target.value)}
               placeholder="PayPal.me link (optional)"
+              className="w-full pl-10 pr-4 py-3 border border-input rounded-lg bg-background text-foreground text-[16px] focus:ring-2 focus:ring-primary/50 focus:border-primary"
+            />
+          </div>
+          <div className="relative">
+            <ArrowRight className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={botUrl}
+              onChange={(e) => setBotUrl(e.target.value)}
+              placeholder="Reddit bot URL (e.g. http://your-server:3099)"
               className="w-full pl-10 pr-4 py-3 border border-input rounded-lg bg-background text-foreground text-[16px] focus:ring-2 focus:ring-primary/50 focus:border-primary"
             />
           </div>

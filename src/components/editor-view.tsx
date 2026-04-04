@@ -26,6 +26,7 @@ import {
   ExternalLink,
   History,
   Sparkles,
+  Send,
 } from "lucide-react";
 import Image from "next/image";
 import { ImageCompare } from "@/components/image-compare";
@@ -1592,12 +1593,47 @@ export function EditorView() {
                     onClick={() =>
                       handleDownload(
                         watermarkedUrl,
-                        `fixtral-watermarked-${Date.now()}.png`,
+                        `fixtral-watermarked-${Date.now()}.jpg`,
                       )
                     }
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Download Watermarked Image
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="w-full bg-orange-600 hover:bg-orange-700"
+                    disabled={!currentItem?.post?.postUrl}
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(watermarkedUrl!);
+                        const blob = await res.blob();
+                        const formData = new FormData();
+                        formData.append("image", blob, `watermarked-${Date.now()}.jpg`);
+                        formData.append("redditUrl", currentItem!.post.postUrl);
+                        const paypal = localStorage.getItem("paypal_link") || "";
+                        if (paypal) formData.append("paypalLink", paypal);
+                        const botUrl = localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099";
+                        const botSecret = localStorage.getItem("bot_secret") || "";
+                        if (botSecret) formData.append("secret", botSecret);
+                        const botRes = await fetch(`${botUrl}/reply`, {
+                          method: "POST",
+                          body: formData,
+                        });
+                        const result = await botRes.json();
+                        if (result.success) {
+                          alert("Reply posted to Reddit!");
+                        } else {
+                          alert("Bot error: " + (result.error || "Unknown error"));
+                        }
+                      } catch (err: any) {
+                        alert("Could not reach bot: " + err.message);
+                      }
+                    }}
+                  >
+                    <Send className="mr-2 h-4 w-4" />
+                    Send to Reddit Bot
                   </Button>
                   <p className="text-[10px] text-muted-foreground text-center">
                     Copies the watermarked image to clipboard. Download if copy
