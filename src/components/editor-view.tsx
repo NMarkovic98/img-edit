@@ -1615,7 +1615,7 @@ export function EditorView() {
                         const paypal = localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
                         const botUrl = localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099";
-                        const botSecret = localStorage.getItem("bot_secret") || "";
+                        const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
                         if (botSecret) formData.append("secret", botSecret);
                         const botRes = await fetch(`${botUrl}/reply`, {
                           method: "POST",

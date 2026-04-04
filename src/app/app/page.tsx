@@ -63,7 +63,7 @@ function LabsInline() {
       formData.append("redditUrl", redditUrl);
       const paypal = localStorage.getItem("paypal_link") || "";
       if (paypal) formData.append("paypalLink", paypal);
-      const secret = localStorage.getItem("bot_secret") || "";
+      const secret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
       if (secret) formData.append("secret", secret);
 
       const startTime = Date.now();
