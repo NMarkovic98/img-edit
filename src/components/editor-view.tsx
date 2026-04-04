@@ -464,7 +464,6 @@ export function EditorView() {
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
   const watermarkedBlobRef = useRef<Blob | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -549,7 +548,6 @@ export function EditorView() {
           watermarkedBlobRef.current = null;
 
           setCurrentItem(pendingItem);
-          setSelectedModel(pendingItem.modelOverride || null);
           setEditPrompt(pendingItem.analysis);
 
           console.log("EditorView: Set current item and edit prompt");
@@ -631,7 +629,7 @@ export function EditorView() {
           imageUrl: currentItem.post.imageUrl,
           changeSummary: editPrompt,
           allImages: currentItem.allImages || [currentItem.post.imageUrl],
-          modelOverride: selectedModel || currentItem.modelOverride || null,
+          modelOverride: currentItem.modelOverride || null,
           editCategory: currentItem.editCategory || null,
           hasFaceEdit: currentItem.hasFaceEdit ?? false,
           aiPolicy: currentItem.aiPolicy || "unknown",
@@ -1167,37 +1165,8 @@ export function EditorView() {
             </CardContent>
           </Card>
 
-          {/* Model Selector + Generate Button */}
+          {/* Generate Button */}
           <div className="flex flex-col items-center gap-2 px-2">
-            <select
-              value={selectedModel || currentItem?.modelOverride || "auto"}
-              onChange={(e) => setSelectedModel(e.target.value === "auto" ? null : e.target.value)}
-              className="w-full sm:w-auto px-3 py-2 rounded-md border border-border bg-background text-sm"
-              disabled={isEditing}
-            >
-              <option value="auto">Auto (category-based)</option>
-              {(() => {
-                const max = imageDims ? Math.max(imageDims.w, imageDims.h) : 0;
-                const models: { id: string; name: string }[] = [];
-                if (max > 4096) {
-                  models.push({ id: "flux-2-max", name: "FLUX 2 Max (>4K)" });
-                  models.push({ id: "seedream-4.5", name: "Seedream 4.5 (>4K)" });
-                  models.push({ id: "seedream-5-lite", name: "Seedream 5 Lite (>4K)" });
-                } else if (max > 2048) {
-                  models.push({ id: "nano-banana-pro", name: "NB Pro 4K" });
-                  models.push({ id: "nano-banana-2", name: "NB2 4K" });
-                } else if (max > 0) {
-                  models.push({ id: "nano-banana-pro", name: "NB Pro 2K" });
-                }
-                models.push({ id: "kontext-pro", name: "Kontext Pro" });
-                models.push({ id: "kontext-max", name: "Kontext Max" });
-                models.push({ id: "bria-bg-remove", name: "BG Remove" });
-                models.push({ id: "aura-sr", name: "Aura SR (Unblur)" });
-                return models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ));
-              })()}
-            </select>
             <Button
               onClick={generateEditedImage}
               disabled={isEditing || !editPrompt.trim()}
