@@ -20,11 +20,209 @@ import {
   CheckCircle,
   X,
   Cloud,
+  FlaskConical,
 } from "lucide-react";
 import { ImageCompare } from "@/components/image-compare";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
 import { authedFetch } from "@/lib/api";
+import { useRef } from "react";
+
+function LabsInline() {
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [redditUrl, setRedditUrl] = useState(
+    "https://www.reddit.com/r/test12331/comments/1sbijra/test/"
+  );
+  const [botUrl, setBotUrl] = useState("");
+  const [status, setStatus] = useState("");
+  const [progress, setProgress] = useState("");
+  const [logs, setLogs] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("bot_url");
+    setBotUrl(
+      saved || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099"
+    );
+  }, []);
+
+  function log(msg: string) {
+    const ts = new Date().toLocaleTimeString();
+    setLogs((prev) => [`[${ts}] ${msg}`, ...prev]);
+  }
+
+  async function sendToBot() {
+    if (!imageFile || !redditUrl.trim()) return;
+    setStatus("sending");
+    setProgress("Uploading image to bot...");
+    log(`Sending to ${botUrl}/reply`);
+    try {
+      const formData = new FormData();
+      formData.append("image", imageFile, imageFile.name);
+      formData.append("redditUrl", redditUrl);
+      const paypal = localStorage.getItem("paypal_link") || "";
+      if (paypal) formData.append("paypalLink", paypal);
+      const secret = localStorage.getItem("bot_secret") || "";
+      if (secret) formData.append("secret", secret);
+
+      const startTime = Date.now();
+      const iv = setInterval(() => {
+        const s = Math.floor((Date.now() - startTime) / 1000);
+        if (s < 5) setProgress("Opening Reddit post...");
+        else if (s < 10) setProgress("Clicking comment box...");
+        else if (s < 15) setProgress("Uploading image...");
+        else if (s < 22) setProgress("Waiting for upload...");
+        else if (s < 28) setProgress("Typing comment...");
+        else if (s < 35) setProgress("Submitting...");
+        else setProgress("Almost done...");
+      }, 1000);
+
+      const res = await fetch(`${botUrl}/reply`, {
+        method: "POST",
+        body: formData,
+      });
+      clearInterval(iv);
+      const data = await res.json();
+      if (data.success) {
+        setStatus("success");
+        setProgress("Comment posted!");
+        log("SUCCESS");
+      } else {
+        setStatus("error");
+        setProgress("Failed");
+        log(`FAILED: ${data.error}`);
+      }
+    } catch (err: any) {
+      setStatus("error");
+      setProgress("Connection failed");
+      log(`ERROR: ${err.message}`);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {progress && (
+        <div
+          className={`rounded-lg p-3 text-sm font-medium flex items-center gap-3 ${
+            status === "success"
+              ? "bg-green-500/10 text-green-500 border border-green-500/30"
+              : status === "error"
+              ? "bg-red-500/10 text-red-500 border border-red-500/30"
+              : "bg-yellow-500/10 text-yellow-500 border border-yellow-500/30"
+          }`}
+        >
+          {status === "sending" && (
+            <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          )}
+          {status === "success" && (
+            <CheckCircle className="h-4 w-4 shrink-0" />
+          )}
+          {status === "error" && <X className="h-4 w-4 shrink-0" />}
+          <span>{progress}</span>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <label className="text-xs text-muted-foreground font-medium">
+          Bot Server
+        </label>
+        <input
+          type="text"
+          value={botUrl}
+          onChange={(e) => {
+            setBotUrl(e.target.value);
+            localStorage.setItem("bot_url", e.target.value);
+          }}
+          className="w-full bg-muted rounded px-3 py-2 text-sm border"
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs text-muted-foreground font-medium">
+          Reddit Post URL
+        </label>
+        <input
+          type="text"
+          value={redditUrl}
+          onChange={(e) => setRedditUrl(e.target.value)}
+          className="w-full bg-muted rounded px-3 py-2 text-sm border"
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs text-muted-foreground font-medium">
+          Image
+        </label>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            setImageFile(f);
+            setImagePreview(URL.createObjectURL(f));
+            log(`Selected: ${f.name} (${(f.size / 1024).toFixed(0)} KB)`);
+          }}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="w-full px-4 py-3 bg-muted hover:bg-muted/80 rounded text-sm border border-dashed"
+        >
+          {imageFile ? imageFile.name : "Tap to choose image"}
+        </button>
+        {imagePreview && (
+          <img
+            src={imagePreview}
+            alt="Preview"
+            className="max-h-48 rounded border mx-auto"
+          />
+        )}
+      </div>
+
+      <button
+        onClick={sendToBot}
+        disabled={!imageFile || !redditUrl || status === "sending"}
+        className={`w-full py-3 rounded-lg font-semibold text-sm text-white ${
+          status === "sending"
+            ? "bg-yellow-600 animate-pulse"
+            : status === "success"
+            ? "bg-green-600"
+            : "bg-orange-600 hover:bg-orange-700"
+        } disabled:opacity-50`}
+      >
+        {status === "sending"
+          ? "Posting..."
+          : status === "success"
+          ? "Sent! Again?"
+          : "Send to Reddit Bot"}
+      </button>
+
+      <div className="bg-muted rounded p-3 max-h-36 overflow-y-auto font-mono text-xs space-y-1">
+        {logs.length === 0 ? (
+          <span className="text-muted-foreground">No logs...</span>
+        ) : (
+          logs.map((l, i) => (
+            <div
+              key={i}
+              className={
+                l.includes("ERROR") || l.includes("FAILED")
+                  ? "text-red-500"
+                  : l.includes("SUCCESS")
+                  ? "text-green-500"
+                  : "text-muted-foreground"
+              }
+            >
+              {l}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("queue");
@@ -502,7 +700,7 @@ export default function Dashboard() {
             onValueChange={handleTabChange}
             className="w-full"
           >
-            <TabsList className="grid w-full max-w-full grid-cols-2 h-10 sm:h-11 p-1 bg-muted/50 border overflow-hidden">
+            <TabsList className="grid w-full max-w-full grid-cols-3 h-10 sm:h-11 p-1 bg-muted/50 border overflow-hidden">
               <TabsTrigger
                 value="queue"
                 className="flex items-center justify-center gap-1.5 h-8 sm:h-9 rounded-md font-medium text-xs sm:text-sm data-[state=active]:bg-background data-[state=active]:shadow-sm min-w-0"
@@ -522,6 +720,13 @@ export default function Dashboard() {
                   </div>
                 )}
               </TabsTrigger>
+              <TabsTrigger
+                value="labs"
+                className="flex items-center justify-center gap-1.5 h-8 sm:h-9 rounded-md font-medium text-xs sm:text-sm data-[state=active]:bg-background data-[state=active]:shadow-sm min-w-0"
+              >
+                <FlaskConical className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">Labs</span>
+              </TabsTrigger>
             </TabsList>
 
             <div
@@ -534,6 +739,12 @@ export default function Dashboard() {
               className={`mt-3 sm:mt-4 ${activeTab === "editor" ? "" : "hidden"}`}
             >
               <EditorView />
+            </div>
+
+            <div
+              className={`mt-3 sm:mt-4 ${activeTab === "labs" ? "" : "hidden"}`}
+            >
+              <LabsInline />
             </div>
           </Tabs>
         </main>
