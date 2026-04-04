@@ -464,6 +464,7 @@ export function EditorView() {
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -483,6 +484,15 @@ export function EditorView() {
   } | null>(null);
   const [correctionsLoading, setCorrectionsLoading] = useState(false);
   const { showImage } = useImageViewer();
+
+  // Load image dimensions when currentItem changes
+  useEffect(() => {
+    if (!currentItem?.post?.imageUrl) { setImageDims(null); return; }
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => setImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = currentItem.post.imageUrl;
+  }, [currentItem?.post?.imageUrl]);
 
   // Generate watermarked preview whenever a new editResult is ready
   const generateWatermark = useCallback(async (imgUrl: string) => {
@@ -1161,26 +1171,27 @@ export function EditorView() {
               disabled={isEditing}
             >
               <option value="auto">Auto (category-based)</option>
-              <optgroup label="Kontext">
-                <option value="kontext-pro">Kontext Pro</option>
-                <option value="kontext-max">Kontext Max</option>
-              </optgroup>
-              <optgroup label="FLUX 2">
-                <option value="flux-2-pro">FLUX 2 Pro</option>
-                <option value="flux-2-max">FLUX 2 Max</option>
-              </optgroup>
-              <optgroup label="Nano Banana">
-                <option value="nano-banana-pro">NB Pro</option>
-                <option value="nano-banana-2">NB2</option>
-              </optgroup>
-              <optgroup label="Seedream">
-                <option value="seedream-4.5">Seedream 4.5</option>
-                <option value="seedream-5-lite">Seedream 5 Lite</option>
-              </optgroup>
-              <optgroup label="Utilities">
-                <option value="bria-bg-remove">BG Remove</option>
-                <option value="aura-sr">Aura SR (Unblur)</option>
-              </optgroup>
+              {(() => {
+                const max = imageDims ? Math.max(imageDims.w, imageDims.h) : 0;
+                const models: { id: string; name: string }[] = [];
+                if (max > 4096) {
+                  models.push({ id: "flux-2-max", name: "FLUX 2 Max (>4K)" });
+                  models.push({ id: "seedream-4.5", name: "Seedream 4.5 (>4K)" });
+                  models.push({ id: "seedream-5-lite", name: "Seedream 5 Lite (>4K)" });
+                } else if (max > 2048) {
+                  models.push({ id: "nano-banana-pro", name: "NB Pro 4K" });
+                  models.push({ id: "nano-banana-2", name: "NB2 4K" });
+                } else if (max > 0) {
+                  models.push({ id: "nano-banana-pro", name: "NB Pro 2K" });
+                }
+                models.push({ id: "kontext-pro", name: "Kontext Pro" });
+                models.push({ id: "kontext-max", name: "Kontext Max" });
+                models.push({ id: "bria-bg-remove", name: "BG Remove" });
+                models.push({ id: "aura-sr", name: "Aura SR (Unblur)" });
+                return models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ));
+              })()}
             </select>
             <Button
               onClick={generateEditedImage}
