@@ -463,6 +463,7 @@ export function EditorView() {
   const [editResult, setEditResult] = useState<EditResult | null>(null);
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -534,6 +535,7 @@ export function EditorView() {
           });
 
           setCurrentItem(pendingItem);
+          setSelectedModel(pendingItem.modelOverride || null);
           setEditPrompt(pendingItem.analysis);
 
           console.log("EditorView: Set current item and edit prompt");
@@ -615,7 +617,7 @@ export function EditorView() {
           imageUrl: currentItem.post.imageUrl,
           changeSummary: editPrompt,
           allImages: currentItem.allImages || [currentItem.post.imageUrl],
-          modelOverride: currentItem.modelOverride || null,
+          modelOverride: selectedModel || currentItem.modelOverride || null,
           editCategory: currentItem.editCategory || null,
           hasFaceEdit: currentItem.hasFaceEdit ?? false,
           aiPolicy: currentItem.aiPolicy || "unknown",
@@ -1150,8 +1152,36 @@ export function EditorView() {
             </CardContent>
           </Card>
 
-          {/* Generate Button */}
-          <div className="flex justify-center px-2">
+          {/* Model Selector + Generate Button */}
+          <div className="flex flex-col items-center gap-2 px-2">
+            <select
+              value={selectedModel || currentItem?.modelOverride || "auto"}
+              onChange={(e) => setSelectedModel(e.target.value === "auto" ? null : e.target.value)}
+              className="w-full sm:w-auto px-3 py-2 rounded-md border border-border bg-background text-sm"
+              disabled={isEditing}
+            >
+              <option value="auto">Auto (category-based)</option>
+              <optgroup label="Kontext">
+                <option value="kontext-pro">Kontext Pro</option>
+                <option value="kontext-max">Kontext Max</option>
+              </optgroup>
+              <optgroup label="FLUX 2">
+                <option value="flux-2-pro">FLUX 2 Pro</option>
+                <option value="flux-2-max">FLUX 2 Max</option>
+              </optgroup>
+              <optgroup label="Nano Banana">
+                <option value="nano-banana-pro">NB Pro</option>
+                <option value="nano-banana-2">NB2</option>
+              </optgroup>
+              <optgroup label="Seedream">
+                <option value="seedream-4.5">Seedream 4.5</option>
+                <option value="seedream-5-lite">Seedream 5 Lite</option>
+              </optgroup>
+              <optgroup label="Utilities">
+                <option value="bria-bg-remove">BG Remove</option>
+                <option value="aura-sr">Aura SR (Unblur)</option>
+              </optgroup>
+            </select>
             <Button
               onClick={generateEditedImage}
               disabled={isEditing || !editPrompt.trim()}
