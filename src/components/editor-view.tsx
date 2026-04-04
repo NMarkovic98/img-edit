@@ -1493,131 +1493,137 @@ export function EditorView() {
               </CardContent>
             </Card>
 
-            {/* Watermarked Preview + Copy Reply */}
-            {watermarkedUrl && (
+            {/* Watermarked Preview + Copy Reply + Send to Bot */}
+            {editResult && (
               <Card className="border-purple-500/30 bg-purple-500/5 shadow-lg">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
                     <Copy className="h-4 w-4 text-purple-500" />
-                    Watermarked Preview for Reddit Reply
+                    Reddit Reply
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    Full resolution with watermark overlay. Use the button below
-                    to copy it with your reply text.
+                    Send the edited image to Reddit via bot, or copy/download it.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div
-                    className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() =>
-                      showImage(
-                        watermarkedUrl,
-                        "Watermarked Preview",
-                        watermarkedUrl,
-                      )
-                    }
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={watermarkedUrl}
-                      alt="Watermarked preview"
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                  <Button
-                    onClick={async () => {
-                      try {
-                        setCopied(false);
-                        const paypalLink =
-                          localStorage.getItem("paypal_link") || "";
-                        const tipLine = paypalLink
-                          ? `A tip is appreciated: ${paypalLink}`
-                          : "";
-                        const replyText = [
-                          "Here is your edit!",
-                          "",
-                          tipLine,
-                          "Reply !solved if you like it",
-                        ]
-                          .filter(Boolean)
-                          .join("\n");
-
-                        // Use stored blob directly (iOS Safari can fail to fetch blob: URLs)
-                        let blob = watermarkedBlobRef.current;
-                        if (!blob) {
-                          const res = await fetch(watermarkedUrl);
-                          blob = await res.blob();
-                        }
-                        // Re-encode as PNG if needed
-                        const pngBlob =
-                          blob.type === "image/png"
-                            ? blob
-                            : new Blob([blob], { type: "image/png" });
-                        try {
-                          // Try writing image only (most browsers can't mix image+text)
-                          await navigator.clipboard.write([
-                            new ClipboardItem({
-                              "image/png": pngBlob,
-                            }),
-                          ]);
-                          // Also copy text separately to a hidden textarea as fallback
-                          try {
-                            const textArea = document.createElement("textarea");
-                            textArea.value = replyText;
-                            textArea.style.position = "fixed";
-                            textArea.style.left = "-9999px";
-                            document.body.appendChild(textArea);
-                            textArea.select();
-                            document.execCommand("copy");
-                            document.body.removeChild(textArea);
-                          } catch {}
-                        } catch {
-                          // Fallback: copy text only (some browsers don't support image clipboard)
-                          await navigator.clipboard.writeText(replyText);
-                        }
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 3000);
-                      } catch (err) {
-                        console.error("Copy failed:", err);
-                        // Last resort: download the watermarked image
-                        try {
-                          const link = document.createElement("a");
-                          link.href = watermarkedUrl;
-                          link.download = `fixtral-watermarked-${Date.now()}.jpg`;
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                        } catch {}
+                  {watermarkedUrl && (
+                    <div
+                      className="relative aspect-video overflow-hidden rounded-lg border bg-card cursor-pointer hover:opacity-90 transition-opacity"
+                      onClick={() =>
+                        showImage(
+                          watermarkedUrl,
+                          "Watermarked Preview",
+                          watermarkedUrl,
+                        )
                       }
-                    }}
-                    className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold"
-                  >
-                    {copied ? (
-                      <>
-                        <ClipboardCheck className="mr-2 h-4 w-4" />
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="mr-2 h-4 w-4" />
-                        Copy Watermarked Image + Reply Text
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() =>
-                      handleDownload(
-                        watermarkedUrl,
-                        `fixtral-watermarked-${Date.now()}.jpg`,
-                      )
-                    }
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download Watermarked Image
-                  </Button>
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={watermarkedUrl}
+                        alt="Watermarked preview"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
+                  {watermarkedUrl && (
+                    <>
+                      <Button
+                        onClick={async () => {
+                          try {
+                            setCopied(false);
+                            const paypalLink =
+                              localStorage.getItem("paypal_link") || "";
+                            const tipLine = paypalLink
+                              ? `A tip is appreciated: ${paypalLink}`
+                              : "";
+                            const replyText = [
+                              "Here is your edit!",
+                              "",
+                              tipLine,
+                              "Reply !solved if you like it",
+                            ]
+                              .filter(Boolean)
+                              .join("\n");
+
+                            // Use stored blob directly (iOS Safari can fail to fetch blob: URLs)
+                            let blob = watermarkedBlobRef.current;
+                            if (!blob) {
+                              const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
+                              if (imgUrl) blob = await createWatermarkedBlob(imgUrl);
+                            }
+                            if (!blob) { alert("Could not create watermarked image"); return; }
+                            // Re-encode as PNG if needed
+                            const pngBlob =
+                              blob.type === "image/png"
+                                ? blob
+                                : new Blob([blob], { type: "image/png" });
+                            try {
+                              // Try writing image only (most browsers can't mix image+text)
+                              await navigator.clipboard.write([
+                                new ClipboardItem({
+                                  "image/png": pngBlob,
+                                }),
+                              ]);
+                              // Also copy text separately to a hidden textarea as fallback
+                              try {
+                                const textArea = document.createElement("textarea");
+                                textArea.value = replyText;
+                                textArea.style.position = "fixed";
+                                textArea.style.left = "-9999px";
+                                document.body.appendChild(textArea);
+                                textArea.select();
+                                document.execCommand("copy");
+                                document.body.removeChild(textArea);
+                              } catch {}
+                            } catch {
+                              // Fallback: copy text only (some browsers don't support image clipboard)
+                              await navigator.clipboard.writeText(replyText);
+                            }
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 3000);
+                          } catch (err) {
+                            console.error("Copy failed:", err);
+                            // Last resort: download the watermarked image
+                            try {
+                              const link = document.createElement("a");
+                              link.href = watermarkedUrl;
+                              link.download = `fixtral-watermarked-${Date.now()}.jpg`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                            } catch {}
+                          }
+                        }}
+                        className="w-full bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-semibold"
+                      >
+                        {copied ? (
+                          <>
+                            <ClipboardCheck className="mr-2 h-4 w-4" />
+                            Copied!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="mr-2 h-4 w-4" />
+                            Copy Watermarked Image + Reply Text
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() =>
+                          handleDownload(
+                            watermarkedUrl,
+                            `fixtral-watermarked-${Date.now()}.jpg`,
+                          )
+                        }
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Download Watermarked Image
+                      </Button>
+                    </>
+                  )}
                   <Button
                     variant="default"
                     size="sm"
