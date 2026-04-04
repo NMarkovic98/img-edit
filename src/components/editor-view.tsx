@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { authedFetch } from "@/lib/api";
 import {
   Card,
@@ -463,6 +463,7 @@ export function EditorView() {
   const [editResult, setEditResult] = useState<EditResult | null>(null);
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
+  const watermarkedBlobRef = useRef<Blob | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -498,10 +499,12 @@ export function EditorView() {
   const generateWatermark = useCallback(async (imgUrl: string) => {
     try {
       const blob = await createWatermarkedBlob(imgUrl);
+      watermarkedBlobRef.current = blob;
       const url = URL.createObjectURL(blob);
       setWatermarkedUrl(url);
     } catch (err) {
       console.error("Watermark generation failed:", err);
+      watermarkedBlobRef.current = null;
       setWatermarkedUrl(null);
     }
   }, []);
@@ -543,6 +546,7 @@ export function EditorView() {
             if (prev) URL.revokeObjectURL(prev);
             return null;
           });
+          watermarkedBlobRef.current = null;
 
           setCurrentItem(pendingItem);
           setSelectedModel(pendingItem.modelOverride || null);
@@ -763,6 +767,7 @@ export function EditorView() {
         if (watermarkedUrl) {
           URL.revokeObjectURL(watermarkedUrl);
           setWatermarkedUrl(null);
+          watermarkedBlobRef.current = null;
         }
 
         localStorage.removeItem("pendingEditorItem");
@@ -1568,9 +1573,12 @@ export function EditorView() {
                           .filter(Boolean)
                           .join("\n");
 
-                        // Use the already-generated watermarked blob URL to avoid CORS issues
-                        const res = await fetch(watermarkedUrl);
-                        const blob = await res.blob();
+                        // Use stored blob directly (iOS Safari can fail to fetch blob: URLs)
+                        let blob = watermarkedBlobRef.current;
+                        if (!blob) {
+                          const res = await fetch(watermarkedUrl);
+                          blob = await res.blob();
+                        }
                         // Re-encode as PNG if needed
                         const pngBlob =
                           blob.type === "image/png"
@@ -1648,8 +1656,11 @@ export function EditorView() {
                     disabled={!currentItem?.post?.postUrl}
                     onClick={async () => {
                       try {
-                        const res = await fetch(watermarkedUrl!);
-                        const blob = await res.blob();
+                        let blob = watermarkedBlobRef.current;
+                        if (!blob) {
+                          const res = await fetch(watermarkedUrl!);
+                          blob = await res.blob();
+                        }
                         const formData = new FormData();
                         formData.append("image", blob, `watermarked-${Date.now()}.jpg`);
                         formData.append("redditUrl", currentItem!.post.postUrl);
