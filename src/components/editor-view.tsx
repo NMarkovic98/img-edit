@@ -1625,19 +1625,23 @@ export function EditorView() {
                     disabled={!currentItem?.post?.postUrl}
                     onClick={async () => {
                       try {
+                        // Get watermarked blob — prefer stored ref, regenerate if missing
                         let blob = watermarkedBlobRef.current;
                         if (!blob) {
-                          const res = await fetch(watermarkedUrl!);
-                          blob = await res.blob();
+                          const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
+                          if (!imgUrl) { alert("No edited image found"); return; }
+                          blob = await createWatermarkedBlob(imgUrl);
                         }
+
                         const formData = new FormData();
                         formData.append("image", blob, `watermarked-${Date.now()}.jpg`);
                         formData.append("redditUrl", currentItem!.post.postUrl);
                         const paypal = localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
-                        const botUrl = localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099";
+                        const botUrl = (localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim();
                         const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
                         if (botSecret) formData.append("secret", botSecret);
+
                         const botRes = await fetch(`${botUrl}/reply`, {
                           method: "POST",
                           body: formData,

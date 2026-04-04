@@ -172,7 +172,7 @@ export default function LabsPage() {
               value={botUrl}
               onChange={(e) => {
                 setBotUrl(e.target.value);
-                localStorage.setItem("bot_url", e.target.value);
+                localStorage.setItem("bot_url", e.target.value.trim());
               }}
               className="flex-1 bg-zinc-800 rounded px-3 py-2 text-sm border border-zinc-700 min-w-0"
               placeholder="http://localhost:3099"
