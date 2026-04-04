@@ -372,8 +372,8 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
           if (blob) resolve(blob);
           else reject(new Error("Canvas toBlob failed"));
         },
-        "image/png",
-        1.0,
+        "image/jpeg",
+        0.92,
       );
     };
     img.onerror = () => reject(new Error("Failed to load image for watermark"));
@@ -1564,7 +1564,7 @@ export function EditorView() {
                         try {
                           const link = document.createElement("a");
                           link.href = watermarkedUrl;
-                          link.download = `fixtral-watermarked-${Date.now()}.png`;
+                          link.download = `fixtral-watermarked-${Date.now()}.jpg`;
                           document.body.appendChild(link);
                           link.click();
                           document.body.removeChild(link);
