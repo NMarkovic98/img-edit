@@ -1658,7 +1658,46 @@ export function EditorView() {
                     }}
                   >
                     <Send className="mr-2 h-4 w-4" />
-                    Send to Reddit Bot
+                    Send to Reddit Bot (Watermarked)
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    disabled={!currentItem?.post?.postUrl}
+                    onClick={async () => {
+                      try {
+                        const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
+                        if (!imgUrl) { alert("No edited image found"); return; }
+                        const res = await fetch(imgUrl);
+                        const blob = await res.blob();
+
+                        const formData = new FormData();
+                        formData.append("image", blob, `edited-${Date.now()}.jpg`);
+                        formData.append("redditUrl", currentItem!.post.postUrl);
+                        const paypal = localStorage.getItem("paypal_link") || "";
+                        if (paypal) formData.append("paypalLink", paypal);
+                        const botUrl = (localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim();
+                        const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
+                        if (botSecret) formData.append("secret", botSecret);
+
+                        const botRes = await fetch(`${botUrl}/reply`, {
+                          method: "POST",
+                          body: formData,
+                        });
+                        const result = await botRes.json();
+                        if (result.success) {
+                          alert("Reply posted to Reddit!");
+                        } else {
+                          alert("Bot error: " + (result.error || "Unknown error"));
+                        }
+                      } catch (err: any) {
+                        alert("Could not reach bot: " + err.message);
+                      }
+                    }}
+                  >
+                    <Send className="mr-2 h-4 w-4" />
+                    Send to Reddit Bot (No Watermark)
                   </Button>
                   <p className="text-[10px] text-muted-foreground text-center">
                     Copies the watermarked image to clipboard. Download if copy
