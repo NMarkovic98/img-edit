@@ -4,6 +4,7 @@
 export interface Env {
   KV: KVNamespace;
   REDDIT_PROXY_URL: string;
+  REDDIT_PROXY: Fetcher;
   PROXY_SECRET: string;
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
@@ -185,13 +186,15 @@ async function checkReddit(env: Env) {
     const multiSub = SUBREDDITS.join("+");
     const redditUrl = `https://www.reddit.com/r/${multiSub}/new.json?limit=50&raw_json=1`;
 
-    // Fetch Reddit directly (no proxy needed — CF Workers aren't IP-blocked like Vercel)
-    const res = await fetch(redditUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-      },
-    });
+    // Route through reddit-proxy via service binding — Reddit 403s direct CF Worker egress IPs,
+    // and public Worker→Worker fetch on same account returns 1042.
+    const proxyHeaders: Record<string, string> = {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    };
+    if (env.PROXY_SECRET) proxyHeaders["X-Proxy-Secret"] = env.PROXY_SECRET;
+    const proxyRequestUrl = `https://reddit-proxy/?url=${encodeURIComponent(redditUrl)}`;
+    const res = await env.REDDIT_PROXY.fetch(proxyRequestUrl, { headers: proxyHeaders });
 
     if (!res.ok) {
       const body = await res.text();

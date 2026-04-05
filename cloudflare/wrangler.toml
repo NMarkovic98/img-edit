@@ -11,3 +11,7 @@ id = "699122c8430449dfa2aa7796998a1b23"
 
 [vars]
 REDDIT_PROXY_URL = "https://reddit-proxy.pomocnih.workers.dev"
+
+[[services]]
+binding = "REDDIT_PROXY"
+service = "reddit-proxy"

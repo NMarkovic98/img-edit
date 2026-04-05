@@ -589,7 +589,12 @@ export function QueueView() {
           // Sort: newest first (strictly by time)
           fetchedPosts.sort((a, b) => b.created_utc - a.created_utc);
 
-          setPosts(fetchedPosts);
+          // Don't wipe existing posts on a silent refresh that came back empty
+          // (transient Reddit rate-limit or proxy hiccup). Only replace when we
+          // actually have data, or when this is a user-initiated load.
+          if (fetchedPosts.length > 0 || !silent) {
+            setPosts(fetchedPosts);
+          }
         }
       } catch (error) {
         console.error("Error fetching posts:", error);
