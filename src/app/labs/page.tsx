@@ -16,7 +16,7 @@ export default function LabsPage() {
 
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
-    setBotUrl(saved || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099");
+    setBotUrl((saved || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim());
   }, []);
 
   function log(msg: string) {
@@ -51,7 +51,8 @@ export default function LabsPage() {
     try {
       setProgress("Uploading image to bot server...");
       const formData = new FormData();
-      formData.append("image", imageFile, imageFile.name);
+      const safeName = (imageFile.name || "upload.jpg").replace(/[^\w.\-]+/g, "_");
+      formData.append("image", imageFile, safeName);
       formData.append("redditUrl", redditUrl);
       const paypal = localStorage.getItem("paypal_link") || "";
       if (paypal) formData.append("paypalLink", paypal);
@@ -72,7 +73,8 @@ export default function LabsPage() {
         else setProgress("Almost done, waiting for confirmation...");
       }, 1000);
 
-      const res = await fetch(`${botUrl}/reply`, {
+      const cleanBotUrl = botUrl.trim().replace(/\/$/, "");
+      const res = await fetch(`${cleanBotUrl}/reply`, {
         method: "POST",
         body: formData,
       });
