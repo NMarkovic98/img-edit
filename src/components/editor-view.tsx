@@ -616,8 +616,11 @@ export function EditorView() {
 
     setIsEditing(true);
 
+    // Enhancement aligned with Google's official Nano Banana / Nano Banana Pro
+    // prompting guide: narrative prose, photographic vocabulary, explicit
+    // texture callouts, identity-preservation clause, and anti-retouching negatives.
     const PEOPLE_ENHANCEMENT =
-      " Make this photo look like it was shot today on a professional full-frame mirrorless camera (Sony A7 IV, 33MP) with a 50mm f/1.4 prime lens at f/2.0, ISO 200, 1/160s. Natural soft daylight, true-to-life color science, subtle film-like contrast, crisp but organic micro-contrast. Preserve the exact identity of the person or persons — keep facial structure, bone structure, eye shape and color, nose, lips, jawline, hairline, freckles, moles, scars and any distinguishing marks 1:1. Keep realistic skin texture with visible pores, fine lines, peach fuzz and natural imperfections — absolutely no plastic smoothing, no airbrush, no beauty filter, no waxy skin, no over-sharpening. Preserve natural asymmetry and age. Render fabric weave, hair strands and background detail sharply without HDR halos. Neutral white balance, realistic highlight roll-off, gentle natural grain. The result must look like a real photograph a human photographer took — not AI-generated, not retouched, not stylized.";
+      " The final result is a photorealistic photograph captured today on a full-frame mirrorless camera (Sony A7 IV, 33MP) with an 85mm prime portrait lens at f/2.2, ISO 200, 1/200s, shot by a human photographer. The scene is illuminated by soft natural daylight with physically-plausible shadows and realistic sub-surface scattering on skin, creating a candid, true-to-life atmosphere. Preserve the exact identity of every person 1:1 — facial bone structure, eye shape and color, nose, lips, philtrum, jawline, hairline, ears, freckles, moles, scars, tattoos, stubble and any distinguishing marks must remain unchanged. Keep authentic skin texture with visible pores, fine lines, peach fuzz, natural redness and asymmetry; emphasize fabric weave, individual hair strands and background micro-detail. Neutral white balance, natural highlight roll-off, gentle organic film grain, no HDR halos. This must not look AI-generated, retouched, airbrushed, smoothed, beautified or stylized — no plastic skin, no waxy highlights, no over-sharpening, no uncanny symmetry.";
     const hasPeople = currentItem.hasFaceEdit === true;
     const enhancedPrompt = hasPeople
       ? `${editPrompt.trim()}${PEOPLE_ENHANCEMENT}`
