@@ -589,11 +589,27 @@ export function QueueView() {
           // Sort: newest first (strictly by time)
           fetchedPosts.sort((a, b) => b.created_utc - a.created_utc);
 
-          // Don't wipe existing posts on a silent refresh that came back empty
-          // (transient Reddit rate-limit or proxy hiccup). Only replace when we
-          // actually have data, or when this is a user-initiated load.
-          if (fetchedPosts.length > 0 || !silent) {
+          // Merge with existing state instead of replacing. Partial fetches
+          // (one subreddit 429s while others succeed) would otherwise shrink
+          // the list every 10s. Posts age out naturally via the 2h cutoff.
+          const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
+          if (!silent) {
+            // User-initiated load: trust server fully
             setPosts(fetchedPosts);
+          } else {
+            setPosts((prev) => {
+              const byId = new Map<string, RedditPost>();
+              for (const p of prev) byId.set(p.id, p);
+              // Overlay fresh data (updates scores, flair, etc.)
+              for (const p of fetchedPosts) byId.set(p.id, p);
+              return Array.from(byId.values())
+                .filter((p) => p.created_utc > twoHoursAgo)
+                .filter(
+                  (p) =>
+                    !(p.flair && p.flair.toLowerCase().includes("solved")),
+                )
+                .sort((a, b) => b.created_utc - a.created_utc);
+            });
           }
         }
       } catch (error) {
