@@ -467,6 +467,7 @@ export function EditorView() {
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [sendingBot, setSendingBot] = useState<null | "watermarked" | "nowatermark">(null);
+  const [restoreMode, setRestoreMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -621,10 +622,19 @@ export function EditorView() {
     // texture callouts, identity-preservation clause, and anti-retouching negatives.
     const PEOPLE_ENHANCEMENT =
       " The final result is a photorealistic photograph captured today on a full-frame mirrorless camera (Sony A7 IV, 33MP) with an 85mm prime portrait lens at f/2.2, ISO 200, 1/200s, shot by a human photographer. The scene is illuminated by soft natural daylight with physically-plausible shadows and realistic sub-surface scattering on skin, creating a candid, true-to-life atmosphere. Preserve the exact identity of every person 1:1 — facial bone structure, eye shape and color, nose, lips, philtrum, jawline, hairline, ears, freckles, moles, scars, tattoos, stubble and any distinguishing marks must remain unchanged. Keep authentic skin texture with visible pores, fine lines, peach fuzz, natural redness and asymmetry; emphasize fabric weave, individual hair strands and background micro-detail. Neutral white balance, natural highlight roll-off, gentle organic film grain, no HDR halos. This must not look AI-generated, retouched, airbrushed, smoothed, beautified or stylized — no plastic skin, no waxy highlights, no over-sharpening, no uncanny symmetry.";
+    // Restoration-specific enhancement. Fixes the common failure mode where the
+    // model sharpens only the face and leaves clothing, hands and background
+    // soft/damaged. Forces uniform, whole-frame restoration.
+    const RESTORE_ENHANCEMENT =
+      " This is a full photo restoration: restore the ENTIRE frame uniformly, not only the face. Treat the face, hair, hands, clothing, jewelry, accessories, fabric, furniture, walls, floor, props and background as equally important — every region must receive the same level of damage repair, sharpness, clarity, detail reconstruction and color restoration. Do not apply selective sharpening or focal enhancement to the face while leaving other areas soft, blurry, faded, noisy, scratched, torn or low-resolution. Maintain consistent depth of field throughout — if the original has even focus, keep even focus; do not introduce artificial bokeh or face-only sharpening. Repair scratches, dust, tears, creases, stains, mold, water damage, fading, color shifts, chromatic aberration and film grain damage across the whole image. Reconstruct missing or damaged detail in clothing textures, fabric patterns, background objects and environment with the same fidelity as facial detail. Preserve the original era-appropriate wardrobe, hairstyle, objects, environment and photographic style — do not modernize or restyle. Keep natural, period-accurate color grading; if colorizing a black-and-white image, apply realistic historically-plausible colors uniformly to skin, clothing and environment.";
+
     const hasPeople = currentItem.hasFaceEdit === true;
-    const enhancedPrompt = hasPeople
-      ? `${editPrompt.trim()}${PEOPLE_ENHANCEMENT}`
-      : editPrompt;
+    const isRestore =
+      currentItem.editCategory === "restore_old_photo" || restoreMode;
+
+    let enhancedPrompt = editPrompt.trim();
+    if (isRestore) enhancedPrompt += RESTORE_ENHANCEMENT;
+    if (hasPeople) enhancedPrompt += PEOPLE_ENHANCEMENT;
 
     try {
       const controller = new AbortController();
@@ -1018,6 +1028,32 @@ export function EditorView() {
                 rows={4}
                 placeholder="Enter your edit instructions..."
               />
+              <label className="flex items-start gap-2.5 cursor-pointer select-none py-1">
+                <input
+                  type="checkbox"
+                  checked={
+                    restoreMode ||
+                    currentItem.editCategory === "restore_old_photo"
+                  }
+                  disabled={currentItem.editCategory === "restore_old_photo"}
+                  onChange={(e) => setRestoreMode(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-input accent-primary cursor-pointer disabled:cursor-not-allowed"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">
+                    🔧 Restoration mode
+                    {currentItem.editCategory === "restore_old_photo" && (
+                      <span className="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        auto-detected
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Restore entire frame uniformly (face, clothing, background)
+                    — prevents face-only sharpening.
+                  </div>
+                </div>
+              </label>
             </CardContent>
           </Card>
 
