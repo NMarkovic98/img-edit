@@ -616,6 +616,13 @@ export function EditorView() {
 
     setIsEditing(true);
 
+    const PEOPLE_ENHANCEMENT =
+      " Make this photo look like it was shot today on a professional full-frame mirrorless camera (Sony A7 IV, 33MP) with a 50mm f/1.4 prime lens at f/2.0, ISO 200, 1/160s. Natural soft daylight, true-to-life color science, subtle film-like contrast, crisp but organic micro-contrast. Preserve the exact identity of the person or persons — keep facial structure, bone structure, eye shape and color, nose, lips, jawline, hairline, freckles, moles, scars and any distinguishing marks 1:1. Keep realistic skin texture with visible pores, fine lines, peach fuzz and natural imperfections — absolutely no plastic smoothing, no airbrush, no beauty filter, no waxy skin, no over-sharpening. Preserve natural asymmetry and age. Render fabric weave, hair strands and background detail sharply without HDR halos. Neutral white balance, realistic highlight roll-off, gentle natural grain. The result must look like a real photograph a human photographer took — not AI-generated, not retouched, not stylized.";
+    const hasPeople = currentItem.hasFaceEdit === true;
+    const enhancedPrompt = hasPeople
+      ? `${editPrompt.trim()}${PEOPLE_ENHANCEMENT}`
+      : editPrompt;
+
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5min client timeout for 4K images
@@ -628,7 +635,7 @@ export function EditorView() {
         signal: controller.signal,
         body: JSON.stringify({
           imageUrl: currentItem.post.imageUrl,
-          changeSummary: editPrompt,
+          changeSummary: enhancedPrompt,
           allImages: currentItem.allImages || [currentItem.post.imageUrl],
           modelOverride: currentItem.modelOverride || null,
           editCategory: currentItem.editCategory || null,
