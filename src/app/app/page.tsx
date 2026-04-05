@@ -43,7 +43,7 @@ function LabsInline() {
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
     setBotUrl(
-      saved || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099"
+      process.env.NEXT_PUBLIC_BOT_URL || saved || "http://localhost:3099"
     );
   }, []);
 

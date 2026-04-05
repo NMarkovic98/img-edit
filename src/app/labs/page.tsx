@@ -16,7 +16,7 @@ export default function LabsPage() {
 
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
-    setBotUrl((saved || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim());
+    setBotUrl((process.env.NEXT_PUBLIC_BOT_URL || saved || "http://localhost:3099").trim());
   }, []);
 
   function log(msg: string) {

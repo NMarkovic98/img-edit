@@ -466,6 +466,7 @@ export function EditorView() {
   const watermarkedBlobRef = useRef<Blob | null>(null);
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [sendingBot, setSendingBot] = useState<null | "watermarked" | "nowatermark">(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1628,8 +1629,9 @@ export function EditorView() {
                     variant="default"
                     size="sm"
                     className="w-full bg-orange-600 hover:bg-orange-700"
-                    disabled={!currentItem?.post?.postUrl}
+                    disabled={!currentItem?.post?.postUrl || sendingBot !== null}
                     onClick={async () => {
+                      setSendingBot("watermarked");
                       try {
                         // Get watermarked blob — prefer stored ref, regenerate if missing
                         let blob = watermarkedBlobRef.current;
@@ -1644,7 +1646,7 @@ export function EditorView() {
                         formData.append("redditUrl", currentItem!.post.postUrl);
                         const paypal = localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
-                        const botUrl = (localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim();
+                        const botUrl = (process.env.NEXT_PUBLIC_BOT_URL || localStorage.getItem("bot_url") || "http://localhost:3099").trim();
                         const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
                         if (botSecret) formData.append("secret", botSecret);
 
@@ -1660,18 +1662,27 @@ export function EditorView() {
                         }
                       } catch (err: any) {
                         alert("Could not reach bot: " + err.message);
+                      } finally {
+                        setSendingBot(null);
                       }
                     }}
                   >
-                    <Send className="mr-2 h-4 w-4" />
-                    Send to Reddit Bot (Watermarked)
+                    {sendingBot === "watermarked" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="mr-2 h-4 w-4" />
+                    )}
+                    {sendingBot === "watermarked"
+                      ? "Sending to Reddit..."
+                      : "Send to Reddit Bot (Watermarked)"}
                   </Button>
                   <Button
                     variant="default"
                     size="sm"
                     className="w-full bg-green-600 hover:bg-green-700"
-                    disabled={!currentItem?.post?.postUrl}
+                    disabled={!currentItem?.post?.postUrl || sendingBot !== null}
                     onClick={async () => {
+                      setSendingBot("nowatermark");
                       try {
                         const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
                         if (!imgUrl) { alert("No edited image found"); return; }
@@ -1683,7 +1694,7 @@ export function EditorView() {
                         formData.append("redditUrl", currentItem!.post.postUrl);
                         const paypal = localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
-                        const botUrl = (localStorage.getItem("bot_url") || process.env.NEXT_PUBLIC_BOT_URL || "http://localhost:3099").trim();
+                        const botUrl = (process.env.NEXT_PUBLIC_BOT_URL || localStorage.getItem("bot_url") || "http://localhost:3099").trim();
                         const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
                         if (botSecret) formData.append("secret", botSecret);
 
@@ -1699,11 +1710,19 @@ export function EditorView() {
                         }
                       } catch (err: any) {
                         alert("Could not reach bot: " + err.message);
+                      } finally {
+                        setSendingBot(null);
                       }
                     }}
                   >
-                    <Send className="mr-2 h-4 w-4" />
-                    Send to Reddit Bot (No Watermark)
+                    {sendingBot === "nowatermark" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="mr-2 h-4 w-4" />
+                    )}
+                    {sendingBot === "nowatermark"
+                      ? "Sending to Reddit..."
+                      : "Send to Reddit Bot (No Watermark)"}
                   </Button>
                   <p className="text-[10px] text-muted-foreground text-center">
                     Copies the watermarked image to clipboard. Download if copy
