@@ -214,8 +214,15 @@ export async function runFaceCheck(
   faceResults.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
 
   // Overall verdict = worst across all faces
+  // Use a combined score: descriptor distance + max landmark shift avg
+  const severityScore = (f: SingleFaceResult) => {
+    const maxLandmarkAvg = Object.values(f.groups).reduce((m, g) => Math.max(m, g.avg), 0);
+    // Verdict priority: fail=2, warning=1, pass=0
+    const verdictPrio = f.verdict === "fail" ? 2 : f.verdict === "warning" ? 1 : 0;
+    return verdictPrio * 1000 + f.distance + maxLandmarkAvg * 2;
+  };
   const worstFace = faceResults.reduce((worst, f) =>
-    f.distance > worst.distance ? f : worst, faceResults[0]);
+    severityScore(f) > severityScore(worst) ? f : worst, faceResults[0]);
 
   return {
     distance: worstFace.distance,

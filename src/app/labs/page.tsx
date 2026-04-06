@@ -539,10 +539,10 @@ export default function LabsPage() {
           </div>
         )}
 
-        {/* Fix Faces button — appears after face check when faces exist */}
-        {fcResult && fcOriginal && fcEdited && !fcResult.noFaceOriginal && !fcResult.noFaceEdited && (
+        {/* Fix Faces button — always visible after face check */}
+        {fcResult && (
           <button
-            disabled={warpRunning}
+            disabled={warpRunning || !fcOriginal || !fcEdited || fcResult.noFaceOriginal || fcResult.noFaceEdited}
             onClick={async () => {
               if (!fcOriginal || !fcEdited) return;
               setWarpRunning(true);
