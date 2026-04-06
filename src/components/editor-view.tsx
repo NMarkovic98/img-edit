@@ -1261,6 +1261,50 @@ export function EditorView() {
             </CardContent>
           </Card>
 
+          {/* Final Prompt Preview */}
+          {editPrompt.trim() && (
+            <details className="w-full">
+              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors px-1">
+                Preview final prompt sent to AI
+              </summary>
+              <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-muted text-xs font-mono whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                {(() => {
+                  const hasPeople = currentItem?.hasFaceEdit === true;
+                  const isRestore = currentItem?.editCategory === "restore_old_photo" || restoreMode;
+                  const facePres = currentItem?.facePreservation || "strict";
+                  const aiPolicy = currentItem?.aiPolicy || "unknown";
+
+                  let preview = editPrompt.trim();
+                  if (isRestore) preview += " Full photo restoration: restore the ENTIRE frame uniformly — face, clothing, hands, background all equally. Repair scratches, tears, stains, fading and damage everywhere, not just the face. Do not apply selective face-only sharpening. Preserve the original era-appropriate style, wardrobe and environment — do not modernize.";
+                  if (hasPeople) preview += " Photorealistic result — preserve every person's exact facial identity 1:1 (bone structure, eyes, nose, lips, jawline, freckles, moles, scars, tattoos). Keep authentic skin texture with pores, fine lines and natural asymmetry. Do not smooth, beautify, airbrush or stylize. No plastic skin, no uncanny symmetry.";
+
+                  // Backend preservation rule
+                  if (facePres === "strict") {
+                    if (hasPeople) {
+                      preview += "\n\nCRITICAL: Every person's facial identity must be preserved exactly — same bone structure, same eyes, same nose, same mouth shape, same skin texture. Apply ONLY the specific change described above. Do not regenerate, reshape, or reimagine any face. Do not change any other elements of the image including background, clothing, hair, composition, or any detail not mentioned.";
+                    } else {
+                      preview += "\n\nCRITICAL: Do not alter any person's face, expression, skin, hair, or identity in any way. Do not change any other elements of the image including clothing, background, composition, or any detail not mentioned above.";
+                    }
+                  } else if (facePres === "light") {
+                    preview += "\n\nKeep the result looking natural. Preserve the overall composition and elements not mentioned above.";
+                  } else {
+                    preview += "\n\nDo not change any elements of the image not mentioned above.";
+                  }
+
+                  if (aiPolicy === "no_ai") {
+                    preview += "\n\nCRITICAL: This image must look completely natural and unedited. Make the ABSOLUTE MINIMUM change possible. The edit must be invisible — no artifacts, no style changes, no color shifts, no visible AI manipulation. Preserve every pixel that doesn't need to change.";
+                  }
+
+                  if (analysisHintsEnabled) {
+                    preview += "\n\n[+ quality hints from image analysis if issues detected]";
+                  }
+
+                  return preview;
+                })()}
+              </div>
+            </details>
+          )}
+
           {/* Generate Button */}
           <div className="flex flex-col items-center gap-2 px-2">
             <Button
