@@ -58,6 +58,16 @@ function LabsInline() {
   const fcOrigRef = useRef<HTMLInputElement>(null);
   const fcEditRef = useRef<HTMLInputElement>(null);
 
+  // Face Warp
+  const [warpRunning, setWarpRunning] = useState(false);
+  const [warpResult, setWarpResult] = useState<{
+    correctedDataUrl: string;
+    diffDataUrl: string;
+    facesWarped: number;
+    faceCrops: { label: string; originalCropUrl: string; editedCropUrl: string; diffCropUrl: string }[];
+  } | null>(null);
+  const [warpPreviewMode, setWarpPreviewMode] = useState<"facecrops" | "sidebyside" | "corrected" | "diff">("facecrops");
+
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
     setBotUrl(
@@ -300,6 +310,29 @@ function LabsInline() {
           {fcRunning ? "Analyzing faces..." : "Run Face Check"}
         </button>
 
+        {/* Fix Faces button */}
+        <button
+          disabled={warpRunning || !fcOriginal || !fcEdited || !fcResult}
+          onClick={async () => {
+            if (!fcOriginal || !fcEdited) return;
+            setWarpRunning(true);
+            setWarpResult(null);
+            try {
+              const { warpFacesBack } = await import("@/lib/face-warp");
+              const result = await warpFacesBack(fcOriginal, fcEdited);
+              setWarpResult(result);
+            } catch (err: any) {
+              alert("Face warp failed: " + (err.message || "Unknown error"));
+            }
+            setWarpRunning(false);
+          }}
+          className={`w-full py-3 rounded-lg font-semibold text-sm text-white ${
+            warpRunning ? "bg-purple-600 animate-pulse" : "bg-purple-600 hover:bg-purple-700"
+          } disabled:opacity-50`}
+        >
+          {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Back to Original"}
+        </button>
+
         {fcResult && (
           <div className="bg-muted rounded-lg p-3 space-y-2 text-sm">
             <div className="flex items-center justify-between">
@@ -373,6 +406,82 @@ function LabsInline() {
                   ))}
               </div>
             ) : null}
+          </div>
+        )}
+
+        {/* Warp Result Preview */}
+        {warpResult && (
+          <div className="bg-muted rounded-lg p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">
+                Face Correction
+                <span className="text-muted-foreground font-normal ml-1 text-xs">
+                  ({warpResult.facesWarped} face{warpResult.facesWarped !== 1 ? "s" : ""})
+                </span>
+              </span>
+              <a href={warpResult.correctedDataUrl} download="corrected.png"
+                className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 rounded font-medium text-white">
+                Download
+              </a>
+            </div>
+
+            <div className="flex gap-1 bg-background rounded-lg p-1">
+              {(["facecrops", "sidebyside", "corrected", "diff"] as const).map((mode) => (
+                <button key={mode} onClick={() => setWarpPreviewMode(mode)}
+                  className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+                    warpPreviewMode === mode ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}>
+                  {mode === "facecrops" ? "Face Crops" : mode === "sidebyside" ? "Side by Side" : mode === "corrected" ? "Corrected" : "Diff"}
+                </button>
+              ))}
+            </div>
+
+            {warpPreviewMode === "facecrops" ? (
+              <div className="space-y-3">
+                {warpResult.faceCrops.map((crop) => (
+                  <div key={crop.label} className="space-y-1">
+                    <span className="text-[10px] text-muted-foreground uppercase font-semibold">{crop.label}</span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">Original</span>
+                        <img src={crop.originalCropUrl} alt="Original" className="w-full rounded border" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">Edited</span>
+                        <img src={crop.editedCropUrl} alt="Edited" className="w-full rounded border" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">Diff</span>
+                        <img src={crop.diffCropUrl} alt="Diff" className="w-full rounded border border-red-500/20" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <p className="text-[9px] text-muted-foreground">
+                  Heat map: dark = identical, green = minor, red = major shift (4x amplified)
+                </p>
+              </div>
+            ) : warpPreviewMode === "sidebyside" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-0.5">
+                  <span className="text-[9px] text-muted-foreground uppercase">Edited</span>
+                  <img src={fcEdited!} alt="Edited" className="w-full rounded border" />
+                </div>
+                <div className="space-y-0.5">
+                  <span className="text-[9px] text-muted-foreground uppercase">Corrected</span>
+                  <img src={warpResult.correctedDataUrl} alt="Corrected" className="w-full rounded border border-purple-500/30" />
+                </div>
+              </div>
+            ) : warpPreviewMode === "corrected" ? (
+              <img src={warpResult.correctedDataUrl} alt="Corrected" className="w-full rounded border border-purple-500/30" />
+            ) : (
+              <div className="space-y-1">
+                <img src={warpResult.diffDataUrl} alt="Diff" className="w-full rounded border" />
+                <p className="text-[9px] text-muted-foreground">
+                  Dark = no change, green = minor, red = major shift (5x amplified)
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

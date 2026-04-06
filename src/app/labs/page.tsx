@@ -422,6 +422,31 @@ export default function LabsPage() {
           {fcRunning ? "Analyzing faces..." : "Run Face Check"}
         </button>
 
+        {/* Fix Faces button — right under Run Face Check */}
+        <button
+          disabled={warpRunning || !fcOriginal || !fcEdited || !fcResult}
+          onClick={async () => {
+            if (!fcOriginal || !fcEdited) return;
+            setWarpRunning(true);
+            setWarpResult(null);
+            try {
+              const { warpFacesBack } = await import("@/lib/face-warp");
+              const result = await warpFacesBack(fcOriginal, fcEdited);
+              setWarpResult(result);
+            } catch (err: any) {
+              alert("Face warp failed: " + (err.message || "Unknown error"));
+            }
+            setWarpRunning(false);
+          }}
+          className={`w-full py-4 rounded-lg font-semibold text-sm transition-colors ${
+            warpRunning
+              ? "bg-purple-600 cursor-wait animate-pulse"
+              : "bg-purple-600 hover:bg-purple-700"
+          } disabled:opacity-50 disabled:cursor-not-allowed`}
+        >
+          {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Back to Original"}
+        </button>
+
         {/* Results */}
         {fcResult && (
           <div className="bg-zinc-900 rounded-lg p-4 space-y-3">
@@ -539,32 +564,7 @@ export default function LabsPage() {
           </div>
         )}
 
-        {/* Fix Faces button — always visible after face check */}
-        {fcResult && (
-          <button
-            disabled={warpRunning || !fcOriginal || !fcEdited || fcResult.noFaceOriginal || fcResult.noFaceEdited}
-            onClick={async () => {
-              if (!fcOriginal || !fcEdited) return;
-              setWarpRunning(true);
-              setWarpResult(null);
-              try {
-                const { warpFacesBack } = await import("@/lib/face-warp");
-                const result = await warpFacesBack(fcOriginal, fcEdited);
-                setWarpResult(result);
-              } catch (err: any) {
-                alert("Face warp failed: " + (err.message || "Unknown error"));
-              }
-              setWarpRunning(false);
-            }}
-            className={`w-full py-4 rounded-lg font-semibold text-sm transition-colors ${
-              warpRunning
-                ? "bg-purple-600 cursor-wait animate-pulse"
-                : "bg-purple-600 hover:bg-purple-700"
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-          >
-            {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Back to Original"}
-          </button>
-        )}
+        {/* Fix Faces button — separate from results for visibility */}
 
         {/* Warp Result Preview */}
         {warpResult && (
