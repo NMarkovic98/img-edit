@@ -14,13 +14,27 @@ const LANDMARK_GROUPS: Record<string, [number, number]> = {
   inner_lip: [60, 67],
 };
 
+export interface SingleFaceResult {
+  label: string; // e.g. "Face 1 (left)", "Face 2 (right)"
+  distance: number;
+  verdict: "pass" | "warning" | "fail";
+  verdictLabel: string;
+  groups: Record<string, { avg: number; max: number }>;
+  boundingBox: { x: number; y: number; width: number; height: number };
+}
+
 export interface FaceCheckResult {
+  /** Overall worst verdict across all faces */
   distance: number;
   verdict: "pass" | "warning" | "fail";
   verdictLabel: string;
   groups: Record<string, { avg: number; max: number }>;
   noFaceOriginal: boolean;
   noFaceEdited: boolean;
+  /** Per-face breakdown (populated when multiple faces detected) */
+  faces: SingleFaceResult[];
+  facesDetectedOriginal: number;
+  facesDetectedEdited: number;
 }
 
 async function loadModels() {
@@ -98,6 +112,49 @@ async function loadImageElement(url: string): Promise<HTMLImageElement> {
   });
 }
 
+function classifyVerdict(distance: number): { verdict: "pass" | "warning" | "fail"; verdictLabel: string } {
+  if (distance < 0.4) return { verdict: "pass", verdictLabel: "Face preserved" };
+  if (distance < 0.6) return { verdict: "warning", verdictLabel: "Subtle face drift" };
+  return { verdict: "fail", verdictLabel: "Face shifted" };
+}
+
+function faceLabel(index: number, box: faceapi.Box, imageWidth: number, total: number): string {
+  if (total === 1) return "Face";
+  const centerX = box.x + box.width / 2;
+  const position = centerX < imageWidth * 0.33 ? "left" : centerX > imageWidth * 0.67 ? "right" : "center";
+  return `Face ${index + 1} (${position})`;
+}
+
+/**
+ * Match each original face to the closest edited face by descriptor similarity.
+ * Uses greedy nearest-neighbor (good enough for typical 2-5 faces).
+ */
+function matchFaces(
+  origFaces: faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>>[],
+  editFaces: faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>>[],
+): { origIdx: number; editIdx: number; distance: number }[] {
+  const used = new Set<number>();
+  const matches: { origIdx: number; editIdx: number; distance: number }[] = [];
+
+  for (let oi = 0; oi < origFaces.length; oi++) {
+    let bestDist = Infinity;
+    let bestIdx = -1;
+    for (let ei = 0; ei < editFaces.length; ei++) {
+      if (used.has(ei)) continue;
+      const d = euclidean(origFaces[oi].descriptor, editFaces[ei].descriptor);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = ei;
+      }
+    }
+    if (bestIdx >= 0) {
+      used.add(bestIdx);
+      matches.push({ origIdx: oi, editIdx: bestIdx, distance: bestDist });
+    }
+  }
+  return matches;
+}
+
 export async function runFaceCheck(
   originalUrl: string,
   editedUrl: string,
@@ -109,57 +166,68 @@ export async function runFaceCheck(
     loadImageElement(editedUrl),
   ]);
 
-  const [origDetection, editDetection] = await Promise.all([
-    faceapi
-      .detectSingleFace(origImg)
-      .withFaceLandmarks()
-      .withFaceDescriptor(),
-    faceapi
-      .detectSingleFace(editImg)
-      .withFaceLandmarks()
-      .withFaceDescriptor(),
+  const [origDetections, editDetections] = await Promise.all([
+    faceapi.detectAllFaces(origImg).withFaceLandmarks().withFaceDescriptors(),
+    faceapi.detectAllFaces(editImg).withFaceLandmarks().withFaceDescriptors(),
   ]);
 
-  if (!origDetection) {
+  const emptyResult = (
+    verdict: "pass" | "fail",
+    label: string,
+    noOrig: boolean,
+    noEdit: boolean,
+  ): FaceCheckResult => ({
+    distance: -1, verdict, verdictLabel: label, groups: {},
+    noFaceOriginal: noOrig, noFaceEdited: noEdit,
+    faces: [], facesDetectedOriginal: origDetections.length, facesDetectedEdited: editDetections.length,
+  });
+
+  if (origDetections.length === 0) {
+    return emptyResult("pass", "No face in original", true, editDetections.length === 0);
+  }
+  if (editDetections.length === 0) {
+    return emptyResult("fail", "All faces lost in edit", false, true);
+  }
+
+  // Match original faces to edited faces by descriptor similarity
+  const matches = matchFaces(origDetections, editDetections);
+
+  // Build per-face results
+  const faceResults: SingleFaceResult[] = matches.map((m) => {
+    const orig = origDetections[m.origIdx];
+    const edit = editDetections[m.editIdx];
+    const groups = analyzeLandmarkShifts(orig.landmarks.positions, edit.landmarks.positions);
+    const box = orig.detection.box;
+    const { verdict, verdictLabel } = classifyVerdict(m.distance);
+
     return {
-      distance: -1,
-      verdict: "pass",
-      verdictLabel: "No face in original",
-      groups: {},
-      noFaceOriginal: true,
-      noFaceEdited: !editDetection,
+      label: faceLabel(m.origIdx, box, origImg.width, origDetections.length),
+      distance: m.distance,
+      verdict,
+      verdictLabel,
+      groups,
+      boundingBox: { x: box.x, y: box.y, width: box.width, height: box.height },
     };
-  }
+  });
 
-  if (!editDetection) {
-    return {
-      distance: -1,
-      verdict: "fail",
-      verdictLabel: "Face lost in edit",
-      groups: {},
-      noFaceOriginal: false,
-      noFaceEdited: true,
-    };
-  }
+  // Sort by position (left to right)
+  faceResults.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
 
-  const distance = euclidean(origDetection.descriptor, editDetection.descriptor);
-  const groups = analyzeLandmarkShifts(
-    origDetection.landmarks.positions,
-    editDetection.landmarks.positions,
-  );
+  // Overall verdict = worst across all faces
+  const worstFace = faceResults.reduce((worst, f) =>
+    f.distance > worst.distance ? f : worst, faceResults[0]);
 
-  let verdict: "pass" | "warning" | "fail";
-  let verdictLabel: string;
-  if (distance < 0.4) {
-    verdict = "pass";
-    verdictLabel = "Face preserved";
-  } else if (distance < 0.6) {
-    verdict = "warning";
-    verdictLabel = "Subtle face drift";
-  } else {
-    verdict = "fail";
-    verdictLabel = "Face shifted";
-  }
-
-  return { distance, verdict, verdictLabel, groups, noFaceOriginal: false, noFaceEdited: false };
+  return {
+    distance: worstFace.distance,
+    verdict: worstFace.verdict,
+    verdictLabel: faceResults.length > 1
+      ? `${worstFace.verdictLabel} (${worstFace.label})`
+      : worstFace.verdictLabel,
+    groups: worstFace.groups,
+    noFaceOriginal: false,
+    noFaceEdited: false,
+    faces: faceResults,
+    facesDetectedOriginal: origDetections.length,
+    facesDetectedEdited: editDetections.length,
+  };
 }

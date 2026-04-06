@@ -489,6 +489,9 @@ export function EditorView() {
     groups: Record<string, { avg: number; max: number }>;
     noFaceOriginal: boolean;
     noFaceEdited: boolean;
+    faces?: { label: string; distance: number; verdict: "pass" | "warning" | "fail"; verdictLabel: string; groups: Record<string, { avg: number; max: number }>; boundingBox: { x: number; y: number; width: number; height: number } }[];
+    facesDetectedOriginal?: number;
+    facesDetectedEdited?: number;
   } | null>(null);
   const [isCheckingFace, setIsCheckingFace] = useState(false);
   // Sharp corrections state
@@ -1646,7 +1649,43 @@ export function EditorView() {
                         </span>
                       </div>
                     )}
-                    {Object.keys(faceCheckResult.groups).length > 0 && (
+                    {/* Multi-face: show per-face breakdown */}
+                    {faceCheckResult.faces && faceCheckResult.faces.length > 1 ? (
+                      <div className="space-y-3 pt-1 border-t border-muted/20">
+                        <span className="text-xs text-muted-foreground font-medium">
+                          {faceCheckResult.facesDetectedOriginal} face{faceCheckResult.facesDetectedOriginal !== 1 ? "s" : ""} detected
+                        </span>
+                        {faceCheckResult.faces.map((face) => (
+                          <div key={face.label} className="space-y-1 pl-2 border-l-2 border-muted/30">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-medium">{face.label}</span>
+                              <Badge
+                                className={`text-[10px] ${
+                                  face.verdict === "pass"
+                                    ? "bg-green-500/20 text-green-400 border-green-500/30"
+                                    : face.verdict === "warning"
+                                      ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                                      : "bg-red-500/20 text-red-400 border-red-500/30"
+                                }`}
+                              >
+                                {face.distance.toFixed(4)}
+                              </Badge>
+                            </div>
+                            {Object.entries(face.groups)
+                              .sort(([, a], [, b]) => b.avg - a.avg)
+                              .slice(0, 3) // top 3 shifted landmarks per face
+                              .map(([name, data]) => (
+                                <div key={name} className="flex items-center justify-between text-xs">
+                                  <span className="text-muted-foreground">{name.replace(/_/g, " ")}</span>
+                                  <span className={`font-mono ${data.avg < 0.03 ? "text-green-400" : data.avg < 0.08 ? "text-yellow-400" : "text-red-400"}`}>
+                                    {data.avg.toFixed(4)}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        ))}
+                      </div>
+                    ) : Object.keys(faceCheckResult.groups).length > 0 ? (
                       <div className="space-y-1 pt-1 border-t border-muted/20">
                         <span className="text-xs text-muted-foreground font-medium">
                           Landmark Shifts:
@@ -1669,7 +1708,7 @@ export function EditorView() {
                             </div>
                           ))}
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </CardContent>

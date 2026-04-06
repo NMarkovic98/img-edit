@@ -452,8 +452,44 @@ export default function LabsPage() {
               </div>
             )}
 
-            {/* Landmark groups */}
-            {Object.keys(fcResult.groups).length > 0 && (
+            {/* Per-face breakdown for multi-face images */}
+            {(fcResult as any).faces && (fcResult as any).faces.length > 1 ? (
+              <div className="space-y-3 pt-2 border-t border-zinc-800">
+                <h3 className="text-xs text-zinc-400 uppercase font-semibold">
+                  {(fcResult as any).facesDetectedOriginal} faces detected — per-face shifts
+                </h3>
+                {(fcResult as any).faces.map((face: any) => (
+                  <div key={face.label} className="space-y-1 pl-3 border-l-2 border-zinc-700">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">{face.label}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                        face.verdict === "pass" ? "bg-green-900/50 text-green-300 border border-green-700"
+                          : face.verdict === "warning" ? "bg-yellow-900/50 text-yellow-300 border border-yellow-700"
+                          : "bg-red-900/50 text-red-300 border border-red-700"
+                      }`}>
+                        {face.distance.toFixed(4)}
+                      </span>
+                    </div>
+                    {Object.entries(face.groups as Record<string, { avg: number; max: number }>)
+                      .sort(([, a], [, b]) => b.avg - a.avg)
+                      .map(([name, data]) => (
+                        <div key={name} className="flex items-center gap-2 text-xs">
+                          <span className="text-zinc-400 w-28">{name.replace(/_/g, " ")}</span>
+                          <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${data.avg < 0.03 ? "bg-green-500" : data.avg < 0.08 ? "bg-yellow-500" : "bg-red-500"}`}
+                              style={{ width: `${Math.min(100, data.avg * 500)}%` }}
+                            />
+                          </div>
+                          <span className={`font-mono w-14 text-right ${data.avg < 0.03 ? "text-green-400" : data.avg < 0.08 ? "text-yellow-400" : "text-red-400"}`}>
+                            {data.avg.toFixed(4)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            ) : Object.keys(fcResult.groups).length > 0 ? (
               <div className="space-y-1 pt-2 border-t border-zinc-800">
                 <h3 className="text-xs text-zinc-400 uppercase font-semibold mb-2">
                   Landmark Shifts (normalized)
@@ -463,7 +499,6 @@ export default function LabsPage() {
                   .map(([name, data]) => (
                     <div key={name} className="flex items-center gap-2 text-xs">
                       <span className="text-zinc-400 w-28">{name.replace(/_/g, " ")}</span>
-                      {/* Bar */}
                       <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
                         <div
                           className={`h-full rounded-full ${
@@ -490,7 +525,7 @@ export default function LabsPage() {
                     </div>
                   ))}
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>

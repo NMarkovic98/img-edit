@@ -321,7 +321,40 @@ function LabsInline() {
                 </span>
               </div>
             )}
-            {Object.keys(fcResult.groups).length > 0 && (
+            {(fcResult as any).faces && (fcResult as any).faces.length > 1 ? (
+              <div className="space-y-2 pt-2 border-t">
+                <span className="text-xs text-muted-foreground font-medium">
+                  {(fcResult as any).facesDetectedOriginal} faces detected
+                </span>
+                {(fcResult as any).faces.map((face: any) => (
+                  <div key={face.label} className="space-y-1 pl-2 border-l-2 border-muted-foreground/20">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium">{face.label}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        face.verdict === "pass" ? "bg-green-500/20 text-green-400"
+                          : face.verdict === "warning" ? "bg-yellow-500/20 text-yellow-400"
+                          : "bg-red-500/20 text-red-400"
+                      }`}>{face.distance.toFixed(4)}</span>
+                    </div>
+                    {Object.entries(face.groups as Record<string, { avg: number; max: number }>)
+                      .sort(([, a], [, b]) => b.avg - a.avg)
+                      .slice(0, 3)
+                      .map(([name, data]) => (
+                        <div key={name} className="flex items-center gap-2 text-xs">
+                          <span className="text-muted-foreground w-24">{name.replace(/_/g, " ")}</span>
+                          <div className="flex-1 bg-background rounded-full h-1.5 overflow-hidden">
+                            <div className={`h-full rounded-full ${data.avg < 0.03 ? "bg-green-500" : data.avg < 0.08 ? "bg-yellow-500" : "bg-red-500"}`}
+                              style={{ width: `${Math.min(100, data.avg * 500)}%` }} />
+                          </div>
+                          <span className={`font-mono w-12 text-right ${data.avg < 0.03 ? "text-green-400" : data.avg < 0.08 ? "text-yellow-400" : "text-red-400"}`}>
+                            {data.avg.toFixed(4)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            ) : Object.keys(fcResult.groups).length > 0 ? (
               <div className="space-y-1 pt-2 border-t">
                 <span className="text-xs text-muted-foreground font-medium">Landmark Shifts</span>
                 {Object.entries(fcResult.groups)
@@ -339,7 +372,7 @@ function LabsInline() {
                     </div>
                   ))}
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>
