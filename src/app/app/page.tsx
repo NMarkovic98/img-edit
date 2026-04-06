@@ -68,6 +68,16 @@ function LabsInline() {
   } | null>(null);
   const [warpPreviewMode, setWarpPreviewMode] = useState<"facecrops" | "sidebyside" | "corrected" | "diff">("facecrops");
 
+  // Face Restore (paste original face back)
+  const [restoreRunning, setRestoreRunning] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<{
+    restoredDataUrl: string;
+    diffDataUrl: string;
+    facesRestored: number;
+    faceCrops: { label: string; originalCropUrl: string; editedCropUrl: string; diffCropUrl: string }[];
+  } | null>(null);
+  const [restorePreviewMode, setRestorePreviewMode] = useState<"facecrops" | "sidebyside" | "corrected" | "diff">("facecrops");
+
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
     setBotUrl(
@@ -330,7 +340,30 @@ function LabsInline() {
             warpRunning ? "bg-purple-600 animate-pulse" : "bg-purple-600 hover:bg-purple-700"
           } disabled:opacity-50`}
         >
-          {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Back to Original"}
+          {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Landmarks Back"}
+        </button>
+
+        {/* Restore Faces — paste original face pixels back */}
+        <button
+          disabled={restoreRunning || !fcOriginal || !fcEdited || !fcResult}
+          onClick={async () => {
+            if (!fcOriginal || !fcEdited) return;
+            setRestoreRunning(true);
+            setRestoreResult(null);
+            try {
+              const { restoreFaces } = await import("@/lib/face-warp");
+              const result = await restoreFaces(fcOriginal, fcEdited);
+              setRestoreResult(result);
+            } catch (err: any) {
+              alert("Face restore failed: " + (err.message || "Unknown error"));
+            }
+            setRestoreRunning(false);
+          }}
+          className={`w-full py-3 rounded-lg font-semibold text-sm text-white ${
+            restoreRunning ? "bg-orange-600 animate-pulse" : "bg-orange-600 hover:bg-orange-700"
+          } disabled:opacity-50`}
+        >
+          {restoreRunning ? "Restoring original faces..." : "Restore Faces — Paste Original Back"}
         </button>
 
         {fcResult && (
@@ -477,6 +510,82 @@ function LabsInline() {
             ) : (
               <div className="space-y-1">
                 <img src={warpResult.diffDataUrl} alt="Diff" className="w-full rounded border" />
+                <p className="text-[9px] text-muted-foreground">
+                  Dark = no change, green = minor, red = major shift (5x amplified)
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Restore Result Preview */}
+        {restoreResult && (
+          <div className="bg-muted rounded-lg p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">
+                Face Restore
+                <span className="text-muted-foreground font-normal ml-1 text-xs">
+                  ({restoreResult.facesRestored} face{restoreResult.facesRestored !== 1 ? "s" : ""} — original pixels pasted back)
+                </span>
+              </span>
+              <a href={restoreResult.restoredDataUrl} download="restored.png"
+                className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 rounded font-medium text-white">
+                Download
+              </a>
+            </div>
+
+            <div className="flex gap-1 bg-background rounded-lg p-1">
+              {(["facecrops", "sidebyside", "corrected", "diff"] as const).map((mode) => (
+                <button key={mode} onClick={() => setRestorePreviewMode(mode)}
+                  className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+                    restorePreviewMode === mode ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}>
+                  {mode === "facecrops" ? "Face Crops" : mode === "sidebyside" ? "Side by Side" : mode === "corrected" ? "Restored" : "Diff"}
+                </button>
+              ))}
+            </div>
+
+            {restorePreviewMode === "facecrops" ? (
+              <div className="space-y-3">
+                {restoreResult.faceCrops.map((crop) => (
+                  <div key={crop.label} className="space-y-1">
+                    <span className="text-[10px] text-muted-foreground uppercase font-semibold">{crop.label}</span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">AI Edit</span>
+                        <img src={crop.originalCropUrl} alt="AI Edit" className="w-full rounded border" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">Restored</span>
+                        <img src={crop.editedCropUrl} alt="Restored" className="w-full rounded border border-orange-500/30" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground uppercase">Diff</span>
+                        <img src={crop.diffCropUrl} alt="Diff" className="w-full rounded border border-red-500/20" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <p className="text-[9px] text-muted-foreground">
+                  AI Edit = what the AI generated | Restored = original face pasted back | Diff = what changed
+                </p>
+              </div>
+            ) : restorePreviewMode === "sidebyside" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-0.5">
+                  <span className="text-[9px] text-muted-foreground uppercase">AI Edit</span>
+                  <img src={fcEdited!} alt="AI Edit" className="w-full rounded border" />
+                </div>
+                <div className="space-y-0.5">
+                  <span className="text-[9px] text-muted-foreground uppercase">Restored</span>
+                  <img src={restoreResult.restoredDataUrl} alt="Restored" className="w-full rounded border border-orange-500/30" />
+                </div>
+              </div>
+            ) : restorePreviewMode === "corrected" ? (
+              <img src={restoreResult.restoredDataUrl} alt="Restored" className="w-full rounded border border-orange-500/30" />
+            ) : (
+              <div className="space-y-1">
+                <img src={restoreResult.diffDataUrl} alt="Diff" className="w-full rounded border" />
                 <p className="text-[9px] text-muted-foreground">
                   Dark = no change, green = minor, red = major shift (5x amplified)
                 </p>

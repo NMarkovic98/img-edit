@@ -539,3 +539,260 @@ function euclidean(a: Float32Array, b: Float32Array): number {
   for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
   return Math.sqrt(sum);
 }
+
+// ─── Face Restore — paste original face pixels onto edited image ───
+
+export interface RestoreResult {
+  restoredDataUrl: string;
+  diffDataUrl: string;
+  faceCrops: FaceCrop[];
+  facesRestored: number;
+}
+
+/**
+ * Restores original face pixels onto the edited image.
+ * Uses Delaunay triangulation to warp the original face region
+ * to match the edited face position, then blends with a feathered mask.
+ *
+ * This is for when the AI regenerated the face (different features/expression).
+ * Unlike warpFacesBack (which shifts edited pixels), this takes ORIGINAL pixels
+ * and pastes them onto the edit.
+ */
+export async function restoreFaces(
+  originalUrl: string,
+  editedUrl: string,
+): Promise<RestoreResult> {
+  await loadModels();
+
+  const [origImg, editImg] = await Promise.all([
+    loadImage(originalUrl),
+    loadImage(editedUrl),
+  ]);
+
+  const [origDetections, editDetections] = await Promise.all([
+    faceapi.detectAllFaces(origImg).withFaceLandmarks().withFaceDescriptors(),
+    faceapi.detectAllFaces(editImg).withFaceLandmarks().withFaceDescriptors(),
+  ]);
+
+  if (origDetections.length === 0 || editDetections.length === 0) {
+    throw new Error(`No faces detected (original: ${origDetections.length}, edited: ${editDetections.length})`);
+  }
+
+  const matches = matchFaces(origDetections, editDetections);
+
+  const w = editImg.width;
+  const h = editImg.height;
+
+  // Read original image pixels
+  const origCanvas = document.createElement("canvas");
+  origCanvas.width = origImg.width;
+  origCanvas.height = origImg.height;
+  const origCtx = origCanvas.getContext("2d")!;
+  origCtx.drawImage(origImg, 0, 0);
+  const origData = origCtx.getImageData(0, 0, origImg.width, origImg.height);
+
+  // Start with the edited image as base
+  const outCanvas = document.createElement("canvas");
+  outCanvas.width = w;
+  outCanvas.height = h;
+  const outCtx = outCanvas.getContext("2d")!;
+  outCtx.drawImage(editImg, 0, 0);
+  const outData = outCtx.getImageData(0, 0, w, h);
+
+  // Also keep a copy of edited pixels for diff
+  const editCanvas = document.createElement("canvas");
+  editCanvas.width = w;
+  editCanvas.height = h;
+  editCanvas.getContext("2d")!.drawImage(editImg, 0, 0);
+  const editData = editCanvas.getContext("2d")!.getImageData(0, 0, w, h);
+
+  let facesRestored = 0;
+
+  for (const match of matches) {
+    const origLandmarks = origDetections[match.origIdx].landmarks.positions;
+    const editLandmarks = editDetections[match.editIdx].landmarks.positions;
+
+    const origPts = origLandmarks.map((p) => ({ x: p.x, y: p.y }));
+    const editPts = editLandmarks.map((p) => ({ x: p.x, y: p.y }));
+
+    // Add bounding box corners to anchor surrounding area
+    const editBox = editDetections[match.editIdx].detection.box;
+    const pad = Math.max(editBox.width, editBox.height) * 0.35;
+
+    const editCorners = [
+      { x: Math.max(0, editBox.x - pad), y: Math.max(0, editBox.y - pad) },
+      { x: Math.min(w, editBox.x + editBox.width + pad), y: Math.max(0, editBox.y - pad) },
+      { x: Math.max(0, editBox.x - pad), y: Math.min(h, editBox.y + editBox.height + pad) },
+      { x: Math.min(w, editBox.x + editBox.width + pad), y: Math.min(h, editBox.y + editBox.height + pad) },
+    ];
+
+    const origBox = origDetections[match.origIdx].detection.box;
+    const origPad = Math.max(origBox.width, origBox.height) * 0.35;
+    const origCorners = [
+      { x: Math.max(0, origBox.x - origPad), y: Math.max(0, origBox.y - origPad) },
+      { x: Math.min(origImg.width, origBox.x + origBox.width + origPad), y: Math.max(0, origBox.y - origPad) },
+      { x: Math.max(0, origBox.x - origPad), y: Math.min(origImg.height, origBox.y + origBox.height + origPad) },
+      { x: Math.min(origImg.width, origBox.x + origBox.width + origPad), y: Math.min(origImg.height, origBox.y + origBox.height + origPad) },
+    ];
+
+    // Triangulate on the EDITED (destination) points
+    const dstPoints = [...editPts, ...editCorners];
+    const srcPoints = [...origPts, ...origCorners];
+
+    const tris = delaunay(dstPoints);
+    const hull = convexHull(editPts);
+
+    // For each triangle in the edited image, sample from original image
+    for (const tri of tris) {
+      const dstTri: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }] = [
+        dstPoints[tri.a], dstPoints[tri.b], dstPoints[tri.c],
+      ];
+      const srcTri: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }] = [
+        srcPoints[tri.a], srcPoints[tri.b], srcPoints[tri.c],
+      ];
+
+      // For each pixel in dst triangle, compute where to sample from src (original)
+      const mat = affineMatrix(dstTri, srcTri);
+
+      const xs = [dstTri[0].x, dstTri[1].x, dstTri[2].x];
+      const ys = [dstTri[0].y, dstTri[1].y, dstTri[2].y];
+      const minTX = Math.max(0, Math.floor(Math.min(...xs)));
+      const maxTX = Math.min(w - 1, Math.ceil(Math.max(...xs)));
+      const minTY = Math.max(0, Math.floor(Math.min(...ys)));
+      const maxTY = Math.min(h - 1, Math.ceil(Math.max(...ys)));
+
+      for (let y = minTY; y <= maxTY; y++) {
+        for (let x = minTX; x <= maxTX; x++) {
+          if (!pointInTriangle(x, y, dstTri[0].x, dstTri[0].y, dstTri[1].x, dstTri[1].y, dstTri[2].x, dstTri[2].y)) {
+            continue;
+          }
+
+          // Map to original image coordinates
+          const sx = mat[0] * x + mat[1] * y + mat[2];
+          const sy = mat[3] * x + mat[4] * y + mat[5];
+
+          const sx0 = Math.floor(sx);
+          const sy0 = Math.floor(sy);
+          if (sx0 < 0 || sx0 >= origImg.width - 1 || sy0 < 0 || sy0 >= origImg.height - 1) continue;
+
+          // Feather based on distance from face hull
+          const alpha = featherAlpha(x, y, hull, pad * 0.5);
+          if (alpha < 0.01) continue;
+
+          // Bilinear sample from ORIGINAL image
+          const fx = sx - sx0;
+          const fy = sy - sy0;
+          const ow = origImg.width;
+          const idx00 = (sy0 * ow + sx0) * 4;
+          const idx10 = idx00 + 4;
+          const idx01 = idx00 + ow * 4;
+          const idx11 = idx01 + 4;
+
+          const outIdx = (y * w + x) * 4;
+          for (let c = 0; c < 3; c++) {
+            const origPixel =
+              origData.data[idx00 + c] * (1 - fx) * (1 - fy) +
+              origData.data[idx10 + c] * fx * (1 - fy) +
+              origData.data[idx01 + c] * (1 - fx) * fy +
+              origData.data[idx11 + c] * fx * fy;
+
+            outData.data[outIdx + c] = Math.round(
+              outData.data[outIdx + c] * (1 - alpha) + origPixel * alpha,
+            );
+          }
+        }
+      }
+    }
+    facesRestored++;
+  }
+
+  outCtx.putImageData(outData, 0, 0);
+
+  // Diff: edited vs restored
+  const diffCanvas = document.createElement("canvas");
+  diffCanvas.width = w;
+  diffCanvas.height = h;
+  const diffCtx = diffCanvas.getContext("2d")!;
+  const diffData = diffCtx.createImageData(w, h);
+  for (let i = 0; i < editData.data.length; i += 4) {
+    const dr = Math.abs(editData.data[i] - outData.data[i]);
+    const dg = Math.abs(editData.data[i + 1] - outData.data[i + 1]);
+    const db = Math.abs(editData.data[i + 2] - outData.data[i + 2]);
+    const maxDiff = Math.max(dr, dg, db);
+    const intensity = Math.min(255, maxDiff * 5);
+    if (intensity < 5) {
+      diffData.data[i] = 20; diffData.data[i + 1] = 20; diffData.data[i + 2] = 20;
+    } else {
+      diffData.data[i] = Math.min(255, intensity * 2);
+      diffData.data[i + 1] = Math.max(0, 255 - intensity);
+      diffData.data[i + 2] = 0;
+    }
+    diffData.data[i + 3] = 255;
+  }
+  diffCtx.putImageData(diffData, 0, 0);
+
+  // Per-face crops: original vs restored vs diff
+  const faceCrops: FaceCrop[] = [];
+  for (let mi = 0; mi < matches.length; mi++) {
+    const match = matches[mi];
+    const editBox = editDetections[match.editIdx].detection.box;
+    const cropPad = 0.5;
+    const cx = Math.max(0, Math.round(editBox.x - editBox.width * cropPad));
+    const cy = Math.max(0, Math.round(editBox.y - editBox.height * cropPad));
+    const cropW = Math.min(w - cx, Math.round(editBox.width * (1 + cropPad * 2)));
+    const cropH = Math.min(h - cy, Math.round(editBox.height * (1 + cropPad * 2)));
+    if (cropW < 10 || cropH < 10) continue;
+
+    // Crop from edited (before restore)
+    const editCrop = document.createElement("canvas");
+    editCrop.width = cropW; editCrop.height = cropH;
+    editCrop.getContext("2d")!.drawImage(editCanvas, cx, cy, cropW, cropH, 0, 0, cropW, cropH);
+
+    // Crop from restored (after restore)
+    const restCrop = document.createElement("canvas");
+    restCrop.width = cropW; restCrop.height = cropH;
+    restCrop.getContext("2d")!.drawImage(outCanvas, cx, cy, cropW, cropH, 0, 0, cropW, cropH);
+
+    // Diff between edited crop and restored crop
+    const editCropData = editCrop.getContext("2d")!.getImageData(0, 0, cropW, cropH);
+    const restCropData = restCrop.getContext("2d")!.getImageData(0, 0, cropW, cropH);
+    const faceDiffCanvas = document.createElement("canvas");
+    faceDiffCanvas.width = cropW; faceDiffCanvas.height = cropH;
+    const fdData = faceDiffCanvas.getContext("2d")!.createImageData(cropW, cropH);
+    for (let i = 0; i < editCropData.data.length; i += 4) {
+      const dr = Math.abs(editCropData.data[i] - restCropData.data[i]);
+      const dg = Math.abs(editCropData.data[i + 1] - restCropData.data[i + 1]);
+      const db = Math.abs(editCropData.data[i + 2] - restCropData.data[i + 2]);
+      const maxD = Math.max(dr, dg, db);
+      const intensity = Math.min(255, maxD * 4);
+      if (intensity < 3) {
+        fdData.data[i] = 20; fdData.data[i + 1] = 20; fdData.data[i + 2] = 20;
+      } else {
+        fdData.data[i] = Math.min(255, intensity * 2);
+        fdData.data[i + 1] = Math.max(0, 255 - intensity);
+        fdData.data[i + 2] = 0;
+      }
+      fdData.data[i + 3] = 255;
+    }
+    faceDiffCanvas.getContext("2d")!.putImageData(fdData, 0, 0);
+
+    const total = matches.length;
+    const label = total === 1
+      ? "Face"
+      : `Face ${mi + 1} (${editBox.x + editBox.width / 2 < w * 0.33 ? "left" : editBox.x + editBox.width / 2 > w * 0.67 ? "right" : "center"})`;
+
+    faceCrops.push({
+      label,
+      originalCropUrl: editCrop.toDataURL("image/png"),  // "before" = edited (AI-changed face)
+      editedCropUrl: restCrop.toDataURL("image/png"),     // "after" = restored (original face pasted back)
+      diffCropUrl: faceDiffCanvas.toDataURL("image/png"),
+    });
+  }
+
+  return {
+    restoredDataUrl: outCanvas.toDataURL("image/png"),
+    diffDataUrl: diffCanvas.toDataURL("image/png"),
+    facesRestored,
+    faceCrops,
+  };
+}
