@@ -754,6 +754,14 @@ export async function POST(request: NextRequest) {
     // ai_ok: identity must be preserved, but minor face adjustments allowed to fulfill the request
     const hasReferences = imageUrls.length > 1;
 
+    // Category-specific hints (keep short, one sentence max)
+    let categoryHint = "";
+    if (category === "remove_object" || category === "remove_background") {
+      categoryHint = " Fill removed areas with matching background — correct perspective, lighting and texture.";
+    } else if (category === "restore_old_photo") {
+      categoryHint = " Restore uniformly across the entire frame, not just faces.";
+    }
+
     let rules: string;
     if (aiPolicy === "no_ai") {
       // Strictest: nothing moves, nothing changes except the specific edit
@@ -766,7 +774,7 @@ export async function POST(request: NextRequest) {
       rules = "Do not alter any person's face, expression or identity. Only change what was requested. Keep everything else identical.";
     }
 
-    const prompt = `${changeSummary} ${rules}${qualityHints}`;
+    const prompt = `${changeSummary}${categoryHint} ${rules}${qualityHints}`;
 
     // Select models: user override → category-based smart routing
     let models: ModelChoice[];
