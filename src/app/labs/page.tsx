@@ -29,8 +29,9 @@ export default function LabsPage() {
     correctedDataUrl: string;
     diffDataUrl: string;
     facesWarped: number;
+    faceCrops: { label: string; originalCropUrl: string; editedCropUrl: string; diffCropUrl: string }[];
   } | null>(null);
-  const [warpPreviewMode, setWarpPreviewMode] = useState<"corrected" | "diff" | "sidebyside">("sidebyside");
+  const [warpPreviewMode, setWarpPreviewMode] = useState<"corrected" | "diff" | "sidebyside" | "facecrops">("facecrops");
 
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
@@ -538,8 +539,8 @@ export default function LabsPage() {
           </div>
         )}
 
-        {/* Fix Faces button — appears after face check with drift */}
-        {fcResult && fcOriginal && fcEdited && !fcResult.noFaceOriginal && !fcResult.noFaceEdited && fcResult.distance > 0.1 && (
+        {/* Fix Faces button — appears after face check when faces exist */}
+        {fcResult && fcOriginal && fcEdited && !fcResult.noFaceOriginal && !fcResult.noFaceEdited && (
           <button
             disabled={warpRunning}
             onClick={async () => {
@@ -586,7 +587,7 @@ export default function LabsPage() {
 
             {/* Toggle buttons */}
             <div className="flex gap-1 bg-zinc-800 rounded-lg p-1">
-              {(["sidebyside", "corrected", "diff"] as const).map((mode) => (
+              {(["facecrops", "sidebyside", "corrected", "diff"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setWarpPreviewMode(mode)}
@@ -596,13 +597,38 @@ export default function LabsPage() {
                       : "text-zinc-400 hover:text-zinc-200"
                   }`}
                 >
-                  {mode === "sidebyside" ? "Side by Side" : mode === "corrected" ? "Corrected" : "Diff Map"}
+                  {mode === "facecrops" ? "Face Crops" : mode === "sidebyside" ? "Full Side by Side" : mode === "corrected" ? "Corrected" : "Full Diff"}
                 </button>
               ))}
             </div>
 
             {/* Preview images */}
-            {warpPreviewMode === "sidebyside" ? (
+            {warpPreviewMode === "facecrops" ? (
+              <div className="space-y-4">
+                {warpResult.faceCrops.map((crop) => (
+                  <div key={crop.label} className="space-y-2">
+                    <h4 className="text-xs text-zinc-400 font-semibold uppercase">{crop.label}</h4>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-zinc-500 uppercase font-semibold">Original</span>
+                        <img src={crop.originalCropUrl} alt="Original face" className="w-full rounded border border-zinc-700" />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-zinc-500 uppercase font-semibold">Edited</span>
+                        <img src={crop.editedCropUrl} alt="Edited face" className="w-full rounded border border-zinc-700" />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-zinc-500 uppercase font-semibold">Diff</span>
+                        <img src={crop.diffCropUrl} alt="Diff" className="w-full rounded border border-red-700/30" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <p className="text-[10px] text-zinc-500">
+                  Diff heat map: dark = identical, green = minor change, yellow/red = major pixel shift (4x amplified)
+                </p>
+              </div>
+            ) : warpPreviewMode === "sidebyside" ? (
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <span className="text-[10px] text-zinc-500 uppercase font-semibold">Edited (before fix)</span>

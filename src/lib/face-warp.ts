@@ -191,12 +191,21 @@ function convexHull(points: { x: number; y: number }[]): { x: number; y: number 
 
 // ─── Main warp function ────────────────────────────────────────────
 
+export interface FaceCrop {
+  label: string;
+  originalCropUrl: string;
+  editedCropUrl: string;
+  diffCropUrl: string;
+}
+
 export interface WarpResult {
   /** Data URL of the corrected image */
   correctedDataUrl: string;
   /** Data URL showing only what changed (diff visualization) */
   diffDataUrl: string;
   facesWarped: number;
+  /** Per-face cropped comparisons */
+  faceCrops: FaceCrop[];
 }
 
 export async function warpFacesBack(
@@ -373,10 +382,91 @@ export async function warpFacesBack(
   }
   diffCtx.putImageData(diffData, 0, 0);
 
+  // ── Per-face crops ──────────────────────────────────────────────
+  const faceCrops: FaceCrop[] = [];
+
+  // We need original image pixel data for cropping
+  const origCanvas = document.createElement("canvas");
+  origCanvas.width = origImg.width;
+  origCanvas.height = origImg.height;
+  const origCtx = origCanvas.getContext("2d")!;
+  origCtx.drawImage(origImg, 0, 0);
+
+  for (let mi = 0; mi < matches.length; mi++) {
+    const match = matches[mi];
+    const origBox = origDetections[match.origIdx].detection.box;
+    const editBox = editDetections[match.editIdx].detection.box;
+
+    // Use a unified crop region that covers both boxes with padding
+    const cropPad = 0.5;
+    const cropX = Math.max(0, Math.min(origBox.x, editBox.x) - Math.max(origBox.width, editBox.width) * cropPad);
+    const cropY = Math.max(0, Math.min(origBox.y, editBox.y) - Math.max(origBox.height, editBox.height) * cropPad);
+    const cropR = Math.min(w, Math.max(origBox.x + origBox.width, editBox.x + editBox.width) + Math.max(origBox.width, editBox.width) * cropPad);
+    const cropB = Math.min(h, Math.max(origBox.y + origBox.height, editBox.y + editBox.height) + Math.max(origBox.height, editBox.height) * cropPad);
+    const cropW = Math.round(cropR - cropX);
+    const cropH = Math.round(cropB - cropY);
+    const cx = Math.round(cropX);
+    const cy = Math.round(cropY);
+
+    if (cropW < 10 || cropH < 10) continue;
+
+    // Crop original face
+    const origCropCanvas = document.createElement("canvas");
+    origCropCanvas.width = cropW;
+    origCropCanvas.height = cropH;
+    origCropCanvas.getContext("2d")!.drawImage(origCanvas, cx, cy, cropW, cropH, 0, 0, cropW, cropH);
+
+    // Crop edited face
+    const editCropCanvas = document.createElement("canvas");
+    editCropCanvas.width = cropW;
+    editCropCanvas.height = cropH;
+    editCropCanvas.getContext("2d")!.drawImage(editCanvas, cx, cy, cropW, cropH, 0, 0, cropW, cropH);
+
+    // Per-face diff heat map
+    const origCropData = origCropCanvas.getContext("2d")!.getImageData(0, 0, cropW, cropH);
+    const editCropData = editCropCanvas.getContext("2d")!.getImageData(0, 0, cropW, cropH);
+    const faceDiffCanvas = document.createElement("canvas");
+    faceDiffCanvas.width = cropW;
+    faceDiffCanvas.height = cropH;
+    const faceDiffData = faceDiffCanvas.getContext("2d")!.createImageData(cropW, cropH);
+
+    for (let i = 0; i < origCropData.data.length; i += 4) {
+      const dr = Math.abs(origCropData.data[i] - editCropData.data[i]);
+      const dg = Math.abs(origCropData.data[i + 1] - editCropData.data[i + 1]);
+      const db = Math.abs(origCropData.data[i + 2] - editCropData.data[i + 2]);
+      const maxD = Math.max(dr, dg, db);
+      const intensity = Math.min(255, maxD * 4);
+      if (intensity < 3) {
+        faceDiffData.data[i] = 20;
+        faceDiffData.data[i + 1] = 20;
+        faceDiffData.data[i + 2] = 20;
+      } else {
+        faceDiffData.data[i] = Math.min(255, intensity * 2);
+        faceDiffData.data[i + 1] = Math.max(0, 255 - intensity);
+        faceDiffData.data[i + 2] = 0;
+      }
+      faceDiffData.data[i + 3] = 255;
+    }
+    faceDiffCanvas.getContext("2d")!.putImageData(faceDiffData, 0, 0);
+
+    const total = matches.length;
+    const label = total === 1
+      ? "Face"
+      : `Face ${mi + 1} (${editBox.x + editBox.width / 2 < w * 0.33 ? "left" : editBox.x + editBox.width / 2 > w * 0.67 ? "right" : "center"})`;
+
+    faceCrops.push({
+      label,
+      originalCropUrl: origCropCanvas.toDataURL("image/png"),
+      editedCropUrl: editCropCanvas.toDataURL("image/png"),
+      diffCropUrl: faceDiffCanvas.toDataURL("image/png"),
+    });
+  }
+
   return {
     correctedDataUrl: outCanvas.toDataURL("image/png"),
     diffDataUrl: diffCanvas.toDataURL("image/png"),
     facesWarped,
+    faceCrops,
   };
 }
 
