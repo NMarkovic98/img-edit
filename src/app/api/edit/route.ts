@@ -115,7 +115,10 @@ function nanoBanana2(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
+      aspect_ratio: "auto",
       output_format: "jpeg",
+      safety_tolerance: "6",
+      limit_generations: true,
     },
   };
 }
@@ -134,8 +137,10 @@ function nanoBananaPro(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
+      aspect_ratio: "auto",
       output_format: "jpeg",
       safety_tolerance: "6",
+      limit_generations: true,
     },
   };
 }
