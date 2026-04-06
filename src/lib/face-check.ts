@@ -76,13 +76,25 @@ function analyzeLandmarkShifts(
   return groups;
 }
 
+function proxyUrl(url: string): string {
+  try {
+    const { hostname } = new URL(url);
+    const needsProxy = ["i.redd.it", "i.imgur.com", "preview.redd.it", "external-preview.redd.it"];
+    if (needsProxy.includes(hostname)) {
+      return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+    }
+  } catch {}
+  return url;
+}
+
 async function loadImageElement(url: string): Promise<HTMLImageElement> {
+  const src = proxyUrl(url);
   return new Promise((resolve, reject) => {
     const img = new window.Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = (e) => reject(new Error(`Failed to load image: ${url}`));
-    img.src = url;
+    img.src = src;
   });
 }
 
