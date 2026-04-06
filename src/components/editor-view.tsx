@@ -345,7 +345,13 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
       const short = Math.min(w, h);
 
       // Helper: draw one full-coverage tiled pass at given angle
-      function drawTile(text: string, angle: number, alpha: number, spacing: number, fSize: number) {
+      function drawTile(
+        text: string,
+        angle: number,
+        alpha: number,
+        spacing: number,
+        fSize: number,
+      ) {
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.font = `500 ${fSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
@@ -366,7 +372,7 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
       const fs = Math.max(14, Math.floor(short * 0.022));
       // Two overlapping grids at different angles → impossible to crop clean
       drawTile("© preview", -Math.PI / 5, 0.12, fs * 6, fs);
-      drawTile("© preview", Math.PI / 7,  0.07, fs * 8, fs * 0.85);
+      drawTile("© preview", Math.PI / 7, 0.07, fs * 8, fs * 0.85);
 
       canvas.toBlob(
         (blob) => {
@@ -465,13 +471,26 @@ export function EditorView() {
   const [savedItems, setSavedItems] = useState<EditResult[]>([]);
   const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
   const watermarkedBlobRef = useRef<Blob | null>(null);
-  const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
+  const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(
+    null,
+  );
   const [copied, setCopied] = useState(false);
-  const [sendingBot, setSendingBot] = useState<null | "watermarked" | "nowatermark">(null);
+  const [sendingBot, setSendingBot] = useState<
+    null | "watermarked" | "nowatermark"
+  >(null);
   const [restoreMode, setRestoreMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [faceCheckResult, setFaceCheckResult] = useState<{
+    distance: number;
+    verdict: "pass" | "warning" | "fail";
+    verdictLabel: string;
+    groups: Record<string, { avg: number; max: number }>;
+    noFaceOriginal: boolean;
+    noFaceEdited: boolean;
+  } | null>(null);
+  const [isCheckingFace, setIsCheckingFace] = useState(false);
   // Sharp corrections state
   const [correctionsEnabled, setCorrectionsEnabled] = useState(false);
   const [analysisHintsEnabled, setAnalysisHintsEnabled] = useState(true);
@@ -490,10 +509,14 @@ export function EditorView() {
 
   // Load image dimensions when currentItem changes
   useEffect(() => {
-    if (!currentItem?.post?.imageUrl) { setImageDims(null); return; }
+    if (!currentItem?.post?.imageUrl) {
+      setImageDims(null);
+      return;
+    }
     const img = new window.Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => setImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onload = () =>
+      setImageDims({ w: img.naturalWidth, h: img.naturalHeight });
     img.src = currentItem.post.imageUrl;
   }, [currentItem?.post?.imageUrl]);
 
@@ -543,6 +566,7 @@ export function EditorView() {
 
           // Clear previous edit state before loading new item
           setEditResult(null);
+          setFaceCheckResult(null);
           setCorrectionPreview(null);
           setWatermarkedUrl((prev) => {
             if (prev) URL.revokeObjectURL(prev);
@@ -850,6 +874,26 @@ export function EditorView() {
 
   // Download via proxy — fetches image server-side and streams as attachment
   // Avoids slow fal.ai storage redirects
+  const runFaceCheck = async () => {
+    if (!editResult || !currentItem) return;
+    const editedUrl =
+      editResult.generatedImages?.[0] || editResult.editedContent;
+    const originalUrl = currentItem.post.imageUrl;
+    if (!editedUrl || !originalUrl) return;
+
+    setIsCheckingFace(true);
+    setFaceCheckResult(null);
+    try {
+      const { runFaceCheck: check } = await import("@/lib/face-check");
+      const result = await check(originalUrl, editedUrl);
+      setFaceCheckResult(result);
+    } catch (err: any) {
+      console.error("Face check failed:", err);
+      alert("Face check failed: " + (err.message || "Unknown error"));
+    }
+    setIsCheckingFace(false);
+  };
+
   const proxyDownload = async (imageUrl: string, filename: string) => {
     try {
       const token = localStorage.getItem("app_token") || "";
@@ -1542,6 +1586,95 @@ export function EditorView() {
               </CardContent>
             </Card>
 
+            {/* Quality Check */}
+            <Card className="bg-card/80 backdrop-blur-sm border-muted/20 shadow-lg">
+              <CardHeader className="bg-gradient-to-r from-muted/20 to-transparent pb-3">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-blue-500" />
+                  Face Check
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Biometric face comparison — runs locally, no API cost
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isCheckingFace}
+                  onClick={runFaceCheck}
+                  className="w-full"
+                >
+                  {isCheckingFace ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Analyzing faces...
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      Run Face Check
+                    </>
+                  )}
+                </Button>
+                {faceCheckResult && (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Verdict:</span>
+                      <Badge
+                        className={
+                          faceCheckResult.verdict === "pass"
+                            ? "bg-green-500/20 text-green-400 border-green-500/30"
+                            : faceCheckResult.verdict === "warning"
+                              ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                              : "bg-red-500/20 text-red-400 border-red-500/30"
+                        }
+                      >
+                        {faceCheckResult.verdictLabel.toUpperCase()}
+                      </Badge>
+                    </div>
+                    {faceCheckResult.distance >= 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Distance:</span>
+                        <span
+                          className={`font-mono font-medium ${faceCheckResult.distance < 0.4 ? "text-green-400" : faceCheckResult.distance < 0.6 ? "text-yellow-400" : "text-red-400"}`}
+                        >
+                          {faceCheckResult.distance.toFixed(4)}
+                          <span className="text-muted-foreground text-xs ml-1">
+                            (&lt;0.4 = same)
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                    {Object.keys(faceCheckResult.groups).length > 0 && (
+                      <div className="space-y-1 pt-1 border-t border-muted/20">
+                        <span className="text-xs text-muted-foreground font-medium">
+                          Landmark Shifts:
+                        </span>
+                        {Object.entries(faceCheckResult.groups)
+                          .sort(([, a], [, b]) => b.avg - a.avg)
+                          .map(([name, data]) => (
+                            <div
+                              key={name}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="text-muted-foreground">
+                                {name.replace(/_/g, " ")}
+                              </span>
+                              <span
+                                className={`font-mono ${data.avg < 0.03 ? "text-green-400" : data.avg < 0.08 ? "text-yellow-400" : "text-red-400"}`}
+                              >
+                                {data.avg.toFixed(4)}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Watermarked Preview + Copy Reply + Send to Bot */}
             {editResult && (
               <Card className="border-purple-500/30 bg-purple-500/5 shadow-lg">
@@ -1551,7 +1684,8 @@ export function EditorView() {
                     Reddit Reply
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    Send the edited image to Reddit via bot, or copy/download it.
+                    Send the edited image to Reddit via bot, or copy/download
+                    it.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1597,10 +1731,16 @@ export function EditorView() {
                             // Use stored blob directly (iOS Safari can fail to fetch blob: URLs)
                             let blob = watermarkedBlobRef.current;
                             if (!blob) {
-                              const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
-                              if (imgUrl) blob = await createWatermarkedBlob(imgUrl);
+                              const imgUrl =
+                                editResult?.editedContent ||
+                                editResult?.generatedImages?.[0];
+                              if (imgUrl)
+                                blob = await createWatermarkedBlob(imgUrl);
                             }
-                            if (!blob) { alert("Could not create watermarked image"); return; }
+                            if (!blob) {
+                              alert("Could not create watermarked image");
+                              return;
+                            }
                             // Re-encode as PNG if needed
                             const pngBlob =
                               blob.type === "image/png"
@@ -1615,7 +1755,8 @@ export function EditorView() {
                               ]);
                               // Also copy text separately to a hidden textarea as fallback
                               try {
-                                const textArea = document.createElement("textarea");
+                                const textArea =
+                                  document.createElement("textarea");
                                 textArea.value = replyText;
                                 textArea.style.position = "fixed";
                                 textArea.style.left = "-9999px";
@@ -1677,25 +1818,44 @@ export function EditorView() {
                     variant="default"
                     size="sm"
                     className="w-full bg-orange-600 hover:bg-orange-700"
-                    disabled={!currentItem?.post?.postUrl || sendingBot !== null}
+                    disabled={
+                      !currentItem?.post?.postUrl || sendingBot !== null
+                    }
                     onClick={async () => {
                       setSendingBot("watermarked");
                       try {
                         // Get watermarked blob — prefer stored ref, regenerate if missing
                         let blob = watermarkedBlobRef.current;
                         if (!blob) {
-                          const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
-                          if (!imgUrl) { alert("No edited image found"); return; }
+                          const imgUrl =
+                            editResult?.editedContent ||
+                            editResult?.generatedImages?.[0];
+                          if (!imgUrl) {
+                            alert("No edited image found");
+                            return;
+                          }
                           blob = await createWatermarkedBlob(imgUrl);
                         }
 
                         const formData = new FormData();
-                        formData.append("image", blob, `watermarked-${Date.now()}.jpg`);
+                        formData.append(
+                          "image",
+                          blob,
+                          `watermarked-${Date.now()}.jpg`,
+                        );
                         formData.append("redditUrl", currentItem!.post.postUrl);
-                        const paypal = localStorage.getItem("paypal_link") || "";
+                        const paypal =
+                          localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
-                        const botUrl = (process.env.NEXT_PUBLIC_BOT_URL || localStorage.getItem("bot_url") || "http://localhost:3099").trim();
-                        const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
+                        const botUrl = (
+                          process.env.NEXT_PUBLIC_BOT_URL ||
+                          localStorage.getItem("bot_url") ||
+                          "http://localhost:3099"
+                        ).trim();
+                        const botSecret =
+                          localStorage.getItem("bot_secret") ||
+                          process.env.NEXT_PUBLIC_BOT_SECRET ||
+                          "";
                         if (botSecret) formData.append("secret", botSecret);
 
                         const botRes = await fetch(`${botUrl}/reply`, {
@@ -1706,7 +1866,9 @@ export function EditorView() {
                         if (result.success) {
                           alert("Reply posted to Reddit!");
                         } else {
-                          alert("Bot error: " + (result.error || "Unknown error"));
+                          alert(
+                            "Bot error: " + (result.error || "Unknown error"),
+                          );
                         }
                       } catch (err: any) {
                         alert("Could not reach bot: " + err.message);
@@ -1728,22 +1890,41 @@ export function EditorView() {
                     variant="default"
                     size="sm"
                     className="w-full bg-green-600 hover:bg-green-700"
-                    disabled={!currentItem?.post?.postUrl || sendingBot !== null}
+                    disabled={
+                      !currentItem?.post?.postUrl || sendingBot !== null
+                    }
                     onClick={async () => {
                       setSendingBot("nowatermark");
                       try {
-                        const imgUrl = editResult?.editedContent || editResult?.generatedImages?.[0];
-                        if (!imgUrl) { alert("No edited image found"); return; }
+                        const imgUrl =
+                          editResult?.editedContent ||
+                          editResult?.generatedImages?.[0];
+                        if (!imgUrl) {
+                          alert("No edited image found");
+                          return;
+                        }
                         const res = await fetch(imgUrl);
                         const blob = await res.blob();
 
                         const formData = new FormData();
-                        formData.append("image", blob, `edited-${Date.now()}.jpg`);
+                        formData.append(
+                          "image",
+                          blob,
+                          `edited-${Date.now()}.jpg`,
+                        );
                         formData.append("redditUrl", currentItem!.post.postUrl);
-                        const paypal = localStorage.getItem("paypal_link") || "";
+                        const paypal =
+                          localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
-                        const botUrl = (process.env.NEXT_PUBLIC_BOT_URL || localStorage.getItem("bot_url") || "http://localhost:3099").trim();
-                        const botSecret = localStorage.getItem("bot_secret") || process.env.NEXT_PUBLIC_BOT_SECRET || "";
+                        const botUrl = (
+                          process.env.NEXT_PUBLIC_BOT_URL ||
+                          localStorage.getItem("bot_url") ||
+                          "http://localhost:3099"
+                        ).trim();
+                        const botSecret =
+                          localStorage.getItem("bot_secret") ||
+                          process.env.NEXT_PUBLIC_BOT_SECRET ||
+                          "";
                         if (botSecret) formData.append("secret", botSecret);
 
                         const botRes = await fetch(`${botUrl}/reply`, {
@@ -1754,7 +1935,9 @@ export function EditorView() {
                         if (result.success) {
                           alert("Reply posted to Reddit!");
                         } else {
-                          alert("Bot error: " + (result.error || "Unknown error"));
+                          alert(
+                            "Bot error: " + (result.error || "Unknown error"),
+                          );
                         }
                       } catch (err: any) {
                         alert("Could not reach bot: " + err.message);

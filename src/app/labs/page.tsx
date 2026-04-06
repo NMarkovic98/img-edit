@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import type { FaceCheckResult } from "@/lib/face-check";
 
 const TEST_POST_URL = "https://www.reddit.com/r/test12331/comments/1sbijra/test/";
 
@@ -13,6 +14,14 @@ export default function LabsPage() {
   const [progress, setProgress] = useState<string>("");
   const [logs, setLogs] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Face Check state
+  const [fcOriginal, setFcOriginal] = useState<string | null>(null);
+  const [fcEdited, setFcEdited] = useState<string | null>(null);
+  const [fcResult, setFcResult] = useState<FaceCheckResult | null>(null);
+  const [fcRunning, setFcRunning] = useState(false);
+  const fcOrigRef = useRef<HTMLInputElement>(null);
+  const fcEditRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
@@ -286,6 +295,204 @@ export default function LabsPage() {
             )}
           </div>
         </div>
+
+        {/* ── Face Check ── */}
+        <div className="border-t border-zinc-800 pt-6 mt-6">
+          <h1 className="text-xl sm:text-2xl font-bold">Face Check</h1>
+          <p className="text-zinc-400 text-xs sm:text-sm mt-1">
+            Biometric face comparison — upload two images to compare. Runs locally, no API cost.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {/* Original */}
+          <div className="bg-zinc-900 rounded-lg p-3 space-y-2">
+            <h2 className="font-semibold text-xs text-zinc-400 uppercase">Original</h2>
+            <input
+              ref={fcOrigRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setFcOriginal(URL.createObjectURL(f));
+                  setFcResult(null);
+                }
+              }}
+            />
+            <button
+              onClick={() => fcOrigRef.current?.click()}
+              className="w-full px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm border border-dashed border-zinc-500"
+            >
+              {fcOriginal ? "Change" : "Upload original"}
+            </button>
+            {fcOriginal && (
+              <img src={fcOriginal} alt="Original" className="max-h-48 rounded border border-zinc-700 mx-auto" />
+            )}
+          </div>
+
+          {/* Edited */}
+          <div className="bg-zinc-900 rounded-lg p-3 space-y-2">
+            <h2 className="font-semibold text-xs text-zinc-400 uppercase">Edited</h2>
+            <input
+              ref={fcEditRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setFcEdited(URL.createObjectURL(f));
+                  setFcResult(null);
+                }
+              }}
+            />
+            <button
+              onClick={() => fcEditRef.current?.click()}
+              className="w-full px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm border border-dashed border-zinc-500"
+            >
+              {fcEdited ? "Change" : "Upload edited"}
+            </button>
+            {fcEdited && (
+              <img src={fcEdited} alt="Edited" className="max-h-48 rounded border border-zinc-700 mx-auto" />
+            )}
+          </div>
+        </div>
+
+        {/* URL inputs for remote images */}
+        <div className="bg-zinc-900 rounded-lg p-3 sm:p-4 space-y-2">
+          <h2 className="font-semibold text-xs text-zinc-400 uppercase">Or paste image URLs</h2>
+          <input
+            type="text"
+            placeholder="Original image URL"
+            className="w-full bg-zinc-800 rounded px-3 py-2 text-sm border border-zinc-700"
+            onBlur={(e) => {
+              if (e.target.value.trim()) {
+                setFcOriginal(e.target.value.trim());
+                setFcResult(null);
+              }
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Edited image URL"
+            className="w-full bg-zinc-800 rounded px-3 py-2 text-sm border border-zinc-700"
+            onBlur={(e) => {
+              if (e.target.value.trim()) {
+                setFcEdited(e.target.value.trim());
+                setFcResult(null);
+              }
+            }}
+          />
+        </div>
+
+        {/* Run button */}
+        <button
+          disabled={!fcOriginal || !fcEdited || fcRunning}
+          onClick={async () => {
+            if (!fcOriginal || !fcEdited) return;
+            setFcRunning(true);
+            setFcResult(null);
+            try {
+              const { runFaceCheck } = await import("@/lib/face-check");
+              const result = await runFaceCheck(fcOriginal, fcEdited);
+              setFcResult(result);
+            } catch (err: any) {
+              alert("Face check failed: " + (err.message || "Unknown error"));
+            }
+            setFcRunning(false);
+          }}
+          className={`w-full py-4 rounded-lg font-semibold text-sm transition-colors ${
+            fcRunning
+              ? "bg-blue-600 cursor-wait animate-pulse"
+              : "bg-blue-600 hover:bg-blue-700"
+          } disabled:opacity-50 disabled:cursor-not-allowed`}
+        >
+          {fcRunning ? "Analyzing faces..." : "Run Face Check"}
+        </button>
+
+        {/* Results */}
+        {fcResult && (
+          <div className="bg-zinc-900 rounded-lg p-4 space-y-3">
+            {/* Verdict */}
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-400 text-sm">Verdict</span>
+              <span
+                className={`px-3 py-1 rounded-full text-sm font-bold ${
+                  fcResult.verdict === "pass"
+                    ? "bg-green-900/50 text-green-300 border border-green-700"
+                    : fcResult.verdict === "warning"
+                    ? "bg-yellow-900/50 text-yellow-300 border border-yellow-700"
+                    : "bg-red-900/50 text-red-300 border border-red-700"
+                }`}
+              >
+                {fcResult.verdictLabel}
+              </span>
+            </div>
+
+            {/* Distance */}
+            {fcResult.distance >= 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400 text-sm">Euclidean Distance</span>
+                <span className="font-mono text-sm">
+                  <span
+                    className={
+                      fcResult.distance < 0.4
+                        ? "text-green-400"
+                        : fcResult.distance < 0.6
+                        ? "text-yellow-400"
+                        : "text-red-400"
+                    }
+                  >
+                    {fcResult.distance.toFixed(4)}
+                  </span>
+                  <span className="text-zinc-500 ml-2 text-xs">(&lt;0.4 same / &gt;0.6 different)</span>
+                </span>
+              </div>
+            )}
+
+            {/* Landmark groups */}
+            {Object.keys(fcResult.groups).length > 0 && (
+              <div className="space-y-1 pt-2 border-t border-zinc-800">
+                <h3 className="text-xs text-zinc-400 uppercase font-semibold mb-2">
+                  Landmark Shifts (normalized)
+                </h3>
+                {Object.entries(fcResult.groups)
+                  .sort(([, a], [, b]) => b.avg - a.avg)
+                  .map(([name, data]) => (
+                    <div key={name} className="flex items-center gap-2 text-xs">
+                      <span className="text-zinc-400 w-28">{name.replace(/_/g, " ")}</span>
+                      {/* Bar */}
+                      <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            data.avg < 0.03
+                              ? "bg-green-500"
+                              : data.avg < 0.08
+                              ? "bg-yellow-500"
+                              : "bg-red-500"
+                          }`}
+                          style={{ width: `${Math.min(100, data.avg * 500)}%` }}
+                        />
+                      </div>
+                      <span
+                        className={`font-mono w-14 text-right ${
+                          data.avg < 0.03
+                            ? "text-green-400"
+                            : data.avg < 0.08
+                            ? "text-yellow-400"
+                            : "text-red-400"
+                        }`}
+                      >
+                        {data.avg.toFixed(4)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

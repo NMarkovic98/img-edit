@@ -27,6 +27,16 @@ import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
 import { authedFetch } from "@/lib/api";
 import { useRef } from "react";
+import { ShieldCheck } from "lucide-react";
+
+interface FaceCheckResult {
+  distance: number;
+  verdict: "pass" | "warning" | "fail";
+  verdictLabel: string;
+  groups: Record<string, { avg: number; max: number }>;
+  noFaceOriginal: boolean;
+  noFaceEdited: boolean;
+}
 
 function LabsInline() {
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -39,6 +49,14 @@ function LabsInline() {
   const [progress, setProgress] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Face Check
+  const [fcOriginal, setFcOriginal] = useState<string | null>(null);
+  const [fcEdited, setFcEdited] = useState<string | null>(null);
+  const [fcResult, setFcResult] = useState<FaceCheckResult | null>(null);
+  const [fcRunning, setFcRunning] = useState(false);
+  const fcOrigRef = useRef<HTMLInputElement>(null);
+  const fcEditRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
@@ -218,6 +236,111 @@ function LabsInline() {
               {l}
             </div>
           ))
+        )}
+      </div>
+
+      {/* ── Face Check ── */}
+      <div className="border-t pt-4 mt-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-blue-500" />
+          <h2 className="font-semibold text-sm">Face Check</h2>
+          <span className="text-xs text-muted-foreground">— biometric, runs locally, $0</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground font-medium">Original</label>
+            <input ref={fcOrigRef} type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFcOriginal(URL.createObjectURL(f)); setFcResult(null); } }} />
+            <button onClick={() => fcOrigRef.current?.click()}
+              className="w-full px-3 py-2 bg-muted hover:bg-muted/80 rounded text-sm border border-dashed">
+              {fcOriginal ? "Change" : "Upload original"}
+            </button>
+            {fcOriginal && <img src={fcOriginal} alt="Original" className="max-h-36 rounded border mx-auto" />}
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground font-medium">Edited</label>
+            <input ref={fcEditRef} type="file" accept="image/*" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFcEdited(URL.createObjectURL(f)); setFcResult(null); } }} />
+            <button onClick={() => fcEditRef.current?.click()}
+              className="w-full px-3 py-2 bg-muted hover:bg-muted/80 rounded text-sm border border-dashed">
+              {fcEdited ? "Change" : "Upload edited"}
+            </button>
+            {fcEdited && <img src={fcEdited} alt="Edited" className="max-h-36 rounded border mx-auto" />}
+          </div>
+        </div>
+
+        {/* URL inputs */}
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground font-medium">Or paste image URLs</label>
+          <input type="text" placeholder="Original image URL"
+            className="w-full bg-muted rounded px-3 py-2 text-sm border"
+            onBlur={(e) => { if (e.target.value.trim()) { setFcOriginal(e.target.value.trim()); setFcResult(null); } }} />
+          <input type="text" placeholder="Edited image URL"
+            className="w-full bg-muted rounded px-3 py-2 text-sm border"
+            onBlur={(e) => { if (e.target.value.trim()) { setFcEdited(e.target.value.trim()); setFcResult(null); } }} />
+        </div>
+
+        <button
+          disabled={!fcOriginal || !fcEdited || fcRunning}
+          onClick={async () => {
+            if (!fcOriginal || !fcEdited) return;
+            setFcRunning(true); setFcResult(null);
+            try {
+              const { runFaceCheck } = await import("@/lib/face-check");
+              const result = await runFaceCheck(fcOriginal, fcEdited);
+              setFcResult(result);
+            } catch (err: any) { alert("Face check failed: " + (err.message || "Unknown error")); }
+            setFcRunning(false);
+          }}
+          className={`w-full py-3 rounded-lg font-semibold text-sm text-white ${
+            fcRunning ? "bg-blue-600 animate-pulse" : "bg-blue-600 hover:bg-blue-700"
+          } disabled:opacity-50`}
+        >
+          {fcRunning ? "Analyzing faces..." : "Run Face Check"}
+        </button>
+
+        {fcResult && (
+          <div className="bg-muted rounded-lg p-3 space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Verdict</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                fcResult.verdict === "pass" ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                : fcResult.verdict === "warning" ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30"
+                : "bg-red-500/20 text-red-400 border border-red-500/30"
+              }`}>{fcResult.verdictLabel}</span>
+            </div>
+            {fcResult.distance >= 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Distance</span>
+                <span className="font-mono">
+                  <span className={fcResult.distance < 0.4 ? "text-green-400" : fcResult.distance < 0.6 ? "text-yellow-400" : "text-red-400"}>
+                    {fcResult.distance.toFixed(4)}
+                  </span>
+                  <span className="text-muted-foreground text-xs ml-1">(&lt;0.4 same)</span>
+                </span>
+              </div>
+            )}
+            {Object.keys(fcResult.groups).length > 0 && (
+              <div className="space-y-1 pt-2 border-t">
+                <span className="text-xs text-muted-foreground font-medium">Landmark Shifts</span>
+                {Object.entries(fcResult.groups)
+                  .sort(([, a], [, b]) => b.avg - a.avg)
+                  .map(([name, data]) => (
+                    <div key={name} className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground w-24">{name.replace(/_/g, " ")}</span>
+                      <div className="flex-1 bg-background rounded-full h-1.5 overflow-hidden">
+                        <div className={`h-full rounded-full ${data.avg < 0.03 ? "bg-green-500" : data.avg < 0.08 ? "bg-yellow-500" : "bg-red-500"}`}
+                          style={{ width: `${Math.min(100, data.avg * 500)}%` }} />
+                      </div>
+                      <span className={`font-mono w-12 text-right ${data.avg < 0.03 ? "text-green-400" : data.avg < 0.08 ? "text-yellow-400" : "text-red-400"}`}>
+                        {data.avg.toFixed(4)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
