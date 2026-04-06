@@ -621,6 +621,7 @@ export async function POST(request: NextRequest) {
       modelOverride,
       editCategory,
       hasFaceEdit,
+      facePreservation: rawFacePreservation,
       aiPolicy: rawAiPolicy,
       author,
       postId,
@@ -640,6 +641,7 @@ export async function POST(request: NextRequest) {
 
     const category: EditCategory = editCategory || "remove_object";
     const faceEdit: boolean = hasFaceEdit ?? false;
+    const facePres: "strict" | "light" | "none" = rawFacePreservation || "strict";
     const aiPolicy: AiPolicy = rawAiPolicy || "unknown";
     const skipAnalysisHints: boolean = rawSkipAnalysisHints ?? false;
 
@@ -742,10 +744,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build prompt — adapt based on AI policy
+    // Build prompt — adapt preservation rules based on face_preservation level
     const hasReferences = imageUrls.length > 1;
-    const preservationRule =
-      "Do not change any other elements of the image. Do not alter faces, expressions, skin, hair, clothing, background, or any detail not mentioned above.";
+
+    // Face preservation — the key insight: even face-touching edits (shadow removal,
+    // blemish fix) must preserve facial IDENTITY. We never "unlock" faces for regeneration.
+    let preservationRule: string;
+    if (facePres === "strict") {
+      if (faceEdit) {
+        // Face edit WITH strict preservation: apply only the specific change, lock identity
+        preservationRule =
+          "CRITICAL: Every person's facial identity must be preserved exactly — same bone structure, same eyes, same nose, same mouth shape, same skin texture. Apply ONLY the specific change described above. Do not regenerate, reshape, or reimagine any face. Do not change any other elements of the image including background, clothing, hair, composition, or any detail not mentioned.";
+      } else {
+        // Non-face edit WITH strict preservation: full face lock
+        preservationRule =
+          "CRITICAL: Do not alter any person's face, expression, skin, hair, or identity in any way. Do not change any other elements of the image including clothing, background, composition, or any detail not mentioned above.";
+      }
+    } else if (facePres === "light") {
+      // Creative/stylized edits — face can change but should look natural
+      preservationRule =
+        "Keep the result looking natural. Preserve the overall composition and elements not mentioned above.";
+    } else {
+      // No people or faces irrelevant
+      preservationRule =
+        "Do not change any elements of the image not mentioned above.";
+    }
 
     // NO AI policy = extremely strict minimal edits
     const noAiRule =
@@ -753,12 +776,7 @@ export async function POST(request: NextRequest) {
         ? "\n\nCRITICAL: This image must look completely natural and unedited. Make the ABSOLUTE MINIMUM change possible. The edit must be invisible — no artifacts, no style changes, no color shifts, no visible AI manipulation. Preserve every pixel that doesn't need to change."
         : "";
 
-    let prompt: string;
-    if (hasReferences) {
-      prompt = `Edit the FIRST image using the other image(s) as reference.\n\n${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
-    } else {
-      prompt = `${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
-    }
+    const prompt = `${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
 
     // Select models: user override → category-based smart routing
     let models: ModelChoice[];
@@ -868,6 +886,7 @@ export async function POST(request: NextRequest) {
       tier,
       category,
       hasFaceEdit: faceEdit,
+      facePreservation: facePres,
       aiPolicy,
       hasImageData: true,
       generatedImages: [editedUrl],

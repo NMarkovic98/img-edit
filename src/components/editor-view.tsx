@@ -407,6 +407,7 @@ interface EditorItem {
   modelOverride?: string | null;
   editCategory?: string | null;
   hasFaceEdit?: boolean;
+  facePreservation?: "strict" | "light" | "none";
   aiPolicy?: "ai_ok" | "no_ai" | "unknown";
   timestamp: string;
 }
@@ -653,6 +654,7 @@ export function EditorView() {
           modelOverride: currentItem.modelOverride || null,
           editCategory: currentItem.editCategory || null,
           hasFaceEdit: currentItem.hasFaceEdit ?? false,
+          facePreservation: currentItem.facePreservation || "strict",
           aiPolicy: currentItem.aiPolicy || "unknown",
           author: currentItem.post.author || "unknown",
           postId: currentItem.post.id || "unknown",

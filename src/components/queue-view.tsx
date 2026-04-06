@@ -61,6 +61,7 @@ interface AnalysisResult {
   analysis: string;
   editCategory?: string;
   hasFaceEdit?: boolean;
+  facePreservation?: "strict" | "light" | "none";
   timestamp: string;
 }
 
@@ -657,6 +658,7 @@ export function QueueView() {
           analysis: result.changeSummary,
           editCategory: result.editCategory,
           hasFaceEdit: result.hasFaceEdit,
+          facePreservation: result.facePreservation || "strict",
           timestamp: result.timestamp,
         });
       } else {
@@ -674,6 +676,7 @@ export function QueueView() {
     analysis: string,
     editCategory?: string,
     hasFaceEdit?: boolean,
+    facePreservation?: "strict" | "light" | "none",
   ) => {
     console.log("Sending to editor:", {
       post,
@@ -703,6 +706,7 @@ export function QueueView() {
       modelOverride: postModel[post.id] || null,
       editCategory: editCategory || null,
       hasFaceEdit: hasFaceEdit ?? false,
+      facePreservation: facePreservation || "strict",
       aiPolicy: post.aiPolicy || "unknown",
       timestamp: new Date().toISOString(),
     };
@@ -921,6 +925,7 @@ export function QueueView() {
                         analysisResult.analysis,
                         analysisResult.editCategory,
                         analysisResult.hasFaceEdit,
+                        analysisResult.facePreservation,
                       )
                     }
                     className="flex-1 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold shadow-lg hover:shadow-xl transition-all duration-200 mobile-button"

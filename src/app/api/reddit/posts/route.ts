@@ -730,7 +730,7 @@ export async function PUT(request: NextRequest) {
     const CATEGORY_INSTRUCTION = `
 
 AFTER the editing instruction, on a NEW LINE, output a JSON object with classification:
-{"edit_category": "<category>", "has_face_edit": true/false}
+{"edit_category": "<category>", "has_face_edit": true/false, "face_preservation": "strict"|"light"|"none"}
 
 CATEGORIES (pick ONE):
 - "remove_object" — Remove a person, object, or unwanted element
@@ -747,7 +747,12 @@ CATEGORIES (pick ONE):
 - "body_modification" — Change pose, height, proportions, open/close eyes
 - "professional_headshot" — Make professional portrait
 
-has_face_edit = true ONLY when the edit directly modifies facial features (skin tone, eyes, face swap, beautify face). Removing a person or changing background = false.`;
+has_face_edit = true ONLY when the edit directly modifies facial features (skin tone, eyes, face swap, beautify face, shadow on face, blemish removal). Removing a person or changing background = false.
+
+face_preservation:
+- "strict" = DEFAULT for any image with people. Faces must remain 100% recognizable. Use for: shadow removal on face, skin retouching, blemish removal, background swap, person removal, color correction, enhancement, body modification.
+- "light" = Face may change somewhat. Use for: creative/meme edits on faces, age progression, artistic style transfer.
+- "none" = No face preservation needed. Use for: images with no people, product/landscape/text edits.`;
 
     const aiPolicyRule =
       aiPolicy === "no_ai"
@@ -765,7 +770,7 @@ USER REQUEST (THIS IS YOUR SOURCE OF TRUTH):
 Title: "${title || "No title"}"
 Description: "${description || "No description provided"}"
 
-The FIRST image is the main image. The other image(s) are references.
+The FIRST image is the main image to edit. The other image(s) are reference images.
 
 STRICT RULES:
 - Your instruction MUST match the user's request. Re-read the title and description before writing.
@@ -773,8 +778,13 @@ STRICT RULES:
 - Output ONLY what the user asked for. Nothing extra. Do NOT add your own interpretation.
 - Do NOT mention objects, people, or actions the user did not mention.
 - Do NOT add quality improvements, color corrections, or sharpening unless the user asked for it.
-- If using a reference, say ONLY what the user wants copied from it.
-- Maximum 1-3 sentences. Be specific and concise.${aiPolicyRule}
+- Maximum 3-6 sentences. Be specific and concise.
+
+REFERENCE IMAGE RULES:
+- DESCRIBE what the user wants from the reference in rich VISUAL detail (appearance, clothing, colors, features, pose, build).
+- ALSO say "Use the second provided image as visual reference for [what]" so multi-image models can use it directly.
+- NEVER just say "copy from the reference" without describing what's in it.
+- For people: describe hair color/style, skin tone, build, clothing, glasses, facial hair in detail.${aiPolicyRule}
 
 ${LANGUAGE_RULE}
 ${CATEGORY_INSTRUCTION}`
@@ -818,6 +828,7 @@ ${CATEGORY_INSTRUCTION}`;
     let changeSummary = rawText;
     let editCategory = "remove_object";
     let hasFaceEdit = false;
+    let facePreservation: "strict" | "light" | "none" = "strict";
 
     const jsonMatch = rawText.match(/\{[^}]*"edit_category"[^}]*\}/);
     if (jsonMatch) {
@@ -825,6 +836,9 @@ ${CATEGORY_INSTRUCTION}`;
         const classification = JSON.parse(jsonMatch[0]);
         editCategory = classification.edit_category || "remove_object";
         hasFaceEdit = classification.has_face_edit ?? false;
+        if (["strict", "light", "none"].includes(classification.face_preservation)) {
+          facePreservation = classification.face_preservation;
+        }
         // Remove the JSON from the editing instruction
         changeSummary = rawText.replace(jsonMatch[0], "").trim();
       } catch {
@@ -833,7 +847,7 @@ ${CATEGORY_INSTRUCTION}`;
     }
 
     console.log(
-      `Analysis complete [${editCategory}${hasFaceEdit ? " FACE" : ""}]:`,
+      `Analysis complete [${editCategory}${hasFaceEdit ? " FACE" : ""} fp:${facePreservation}]:`,
       changeSummary,
     );
 
@@ -843,6 +857,7 @@ ${CATEGORY_INSTRUCTION}`;
         changeSummary,
         editCategory,
         hasFaceEdit,
+        facePreservation,
         imageCount: imageParts.length,
         timestamp: new Date().toISOString(),
       }),
