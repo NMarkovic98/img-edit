@@ -102,10 +102,10 @@ export default function LabsPage() {
 
       const data = await res.json();
 
-      if (data.success) {
+      if (data.success || data.status === "queued") {
         setStatus("success");
-        setProgress("Comment posted successfully!");
-        log("SUCCESS: Reply posted to Reddit!");
+        setProgress(data.status === "queued" ? "Comment queued — bot is posting..." : "Comment posted successfully!");
+        log(data.status === "queued" ? "QUEUED: Bot is posting in background" : "SUCCESS: Reply posted to Reddit!");
       } else {
         setStatus("error");
         setProgress("Failed to post comment");

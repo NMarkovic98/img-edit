@@ -122,10 +122,10 @@ function LabsInline() {
       });
       clearInterval(iv);
       const data = await res.json();
-      if (data.success) {
+      if (data.success || data.status === "queued") {
         setStatus("success");
-        setProgress("Comment posted!");
-        log("SUCCESS");
+        setProgress(data.status === "queued" ? "Comment queued — bot is posting..." : "Comment posted!");
+        log(data.status === "queued" ? "QUEUED: Bot is posting in background" : "SUCCESS");
       } else {
         setStatus("error");
         setProgress("Failed");
