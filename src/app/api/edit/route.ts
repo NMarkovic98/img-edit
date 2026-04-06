@@ -749,39 +749,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build prompt — adapt preservation rules based on face_preservation level
+    // Build prompt — two modes:
+    // no_ai: surgical edit, preserve pose/position/expression exactly, zero visible changes beyond the request
+    // ai_ok: identity must be preserved, but minor face adjustments allowed to fulfill the request
     const hasReferences = imageUrls.length > 1;
 
-    // Face preservation — the key insight: even face-touching edits (shadow removal,
-    // blemish fix) must preserve facial IDENTITY. We never "unlock" faces for regeneration.
-    let preservationRule: string;
-    if (facePres === "strict") {
-      if (faceEdit) {
-        // Face edit WITH strict preservation: apply only the specific change, lock identity
-        preservationRule =
-          "CRITICAL: Every person's facial identity must be preserved exactly — same bone structure, same eyes, same nose, same mouth shape, same skin texture. Apply ONLY the specific change described above. Do not regenerate, reshape, or reimagine any face. Do not change any other elements of the image including background, clothing, hair, composition, or any detail not mentioned.";
-      } else {
-        // Non-face edit WITH strict preservation: full face lock
-        preservationRule =
-          "CRITICAL: Do not alter any person's face, expression, skin, hair, or identity in any way. Do not change any other elements of the image including clothing, background, composition, or any detail not mentioned above.";
-      }
-    } else if (facePres === "light") {
-      // Creative/stylized edits — face can change but should look natural
-      preservationRule =
-        "Keep the result looking natural. Preserve the overall composition and elements not mentioned above.";
+    let rules: string;
+    if (aiPolicy === "no_ai") {
+      // Strictest: nothing moves, nothing changes except the specific edit
+      rules = "Keep every person's exact pose, position, expression and appearance. Do not move, reshape or alter anything except what was specifically requested. The edit must be undetectable. Maintain natural skin texture.";
+    } else if (faceEdit) {
+      // AI OK + touching faces: identity locked, minor adjustments allowed
+      rules = "Preserve every person's facial identity — same bone structure, eyes, nose, mouth, skin. Apply only the requested change to the face. Keep natural skin texture with pores. Do not change anything else.";
     } else {
-      // No people or faces irrelevant
-      preservationRule =
-        "Do not change any elements of the image not mentioned above.";
+      // AI OK + not touching faces: standard preservation
+      rules = "Do not alter any person's face, expression or identity. Only change what was requested. Keep everything else identical.";
     }
 
-    // NO AI policy = extremely strict minimal edits
-    const noAiRule =
-      aiPolicy === "no_ai"
-        ? "\n\nCRITICAL: This image must look completely natural and unedited. Make the ABSOLUTE MINIMUM change possible. The edit must be invisible — no artifacts, no style changes, no color shifts, no visible AI manipulation. Preserve every pixel that doesn't need to change."
-        : "";
-
-    const prompt = `${changeSummary}\n\n${preservationRule}${noAiRule}${qualityHints}`;
+    const prompt = `${changeSummary} ${rules}${qualityHints}`;
 
     // Select models: user override → category-based smart routing
     let models: ModelChoice[];

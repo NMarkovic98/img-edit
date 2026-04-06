@@ -645,24 +645,11 @@ export function EditorView() {
 
     setIsEditing(true);
 
-    // Enhancement aligned with Google's official Nano Banana / Nano Banana Pro
-    // prompting guide: narrative prose, photographic vocabulary, explicit
-    // texture callouts, identity-preservation clause, and anti-retouching negatives.
-    const PEOPLE_ENHANCEMENT =
-      " Photorealistic result — preserve every person's exact facial identity 1:1 (bone structure, eyes, nose, lips, jawline, freckles, moles, scars, tattoos). Keep authentic skin texture with pores, fine lines and natural asymmetry. Do not smooth, beautify, airbrush or stylize. No plastic skin, no uncanny symmetry.";
-    // Restoration-specific enhancement. Fixes the common failure mode where the
-    // model sharpens only the face and leaves clothing, hands and background
-    // soft/damaged. Forces uniform, whole-frame restoration.
-    const RESTORE_ENHANCEMENT =
-      " Full photo restoration: restore the ENTIRE frame uniformly — face, clothing, hands, background all equally. Repair scratches, tears, stains, fading and damage everywhere, not just the face. Do not apply selective face-only sharpening. Preserve the original era-appropriate style, wardrobe and environment — do not modernize.";
-
-    const hasPeople = currentItem.hasFaceEdit === true;
     const isRestore =
       currentItem.editCategory === "restore_old_photo" || restoreMode;
 
     let enhancedPrompt = editPrompt.trim();
-    if (isRestore) enhancedPrompt += RESTORE_ENHANCEMENT;
-    if (hasPeople) enhancedPrompt += PEOPLE_ENHANCEMENT;
+    if (isRestore) enhancedPrompt += " Restore the entire frame uniformly, not just faces. If the photo is photographed on a surface (table, desk, scanner bed), crop to only the original photo and straighten it.";
 
     try {
       const controller = new AbortController();
@@ -1271,32 +1258,22 @@ export function EditorView() {
                 {(() => {
                   const hasPeople = currentItem?.hasFaceEdit === true;
                   const isRestore = currentItem?.editCategory === "restore_old_photo" || restoreMode;
-                  const facePres = currentItem?.facePreservation || "strict";
                   const aiPolicy = currentItem?.aiPolicy || "unknown";
 
                   let preview = editPrompt.trim();
-                  if (isRestore) preview += " Full photo restoration: restore the ENTIRE frame uniformly — face, clothing, hands, background all equally. Repair scratches, tears, stains, fading and damage everywhere, not just the face. Do not apply selective face-only sharpening. Preserve the original era-appropriate style, wardrobe and environment — do not modernize.";
-                  if (hasPeople) preview += " Photorealistic result — preserve every person's exact facial identity 1:1 (bone structure, eyes, nose, lips, jawline, freckles, moles, scars, tattoos). Keep authentic skin texture with pores, fine lines and natural asymmetry. Do not smooth, beautify, airbrush or stylize. No plastic skin, no uncanny symmetry.";
+                  if (isRestore) preview += " Restore the entire frame uniformly, not just faces. If the photo is photographed on a surface (table, desk, scanner bed), crop to only the original photo and straighten it.";
 
-                  // Backend preservation rule
-                  if (facePres === "strict") {
-                    if (hasPeople) {
-                      preview += "\n\nCRITICAL: Every person's facial identity must be preserved exactly — same bone structure, same eyes, same nose, same mouth shape, same skin texture. Apply ONLY the specific change described above. Do not regenerate, reshape, or reimagine any face. Do not change any other elements of the image including background, clothing, hair, composition, or any detail not mentioned.";
-                    } else {
-                      preview += "\n\nCRITICAL: Do not alter any person's face, expression, skin, hair, or identity in any way. Do not change any other elements of the image including clothing, background, composition, or any detail not mentioned above.";
-                    }
-                  } else if (facePres === "light") {
-                    preview += "\n\nKeep the result looking natural. Preserve the overall composition and elements not mentioned above.";
-                  } else {
-                    preview += "\n\nDo not change any elements of the image not mentioned above.";
-                  }
-
+                  // Backend rules preview
                   if (aiPolicy === "no_ai") {
-                    preview += "\n\nCRITICAL: This image must look completely natural and unedited. Make the ABSOLUTE MINIMUM change possible. The edit must be invisible — no artifacts, no style changes, no color shifts, no visible AI manipulation. Preserve every pixel that doesn't need to change.";
+                    preview += " Keep every person's exact pose, position, expression and appearance. Do not move, reshape or alter anything except what was specifically requested. The edit must be undetectable. Maintain natural skin texture.";
+                  } else if (hasPeople) {
+                    preview += " Preserve every person's facial identity — same bone structure, eyes, nose, mouth, skin. Apply only the requested change to the face. Keep natural skin texture with pores. Do not change anything else.";
+                  } else {
+                    preview += " Do not alter any person's face, expression or identity. Only change what was requested. Keep everything else identical.";
                   }
 
                   if (analysisHintsEnabled) {
-                    preview += "\n\n[+ quality hints from image analysis if issues detected]";
+                    preview += "\n[+ quality hints if issues detected]";
                   }
 
                   return preview;
