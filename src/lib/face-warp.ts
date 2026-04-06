@@ -615,9 +615,23 @@ export async function restoreFaces(
     const origPts = origLandmarks.map((p) => ({ x: p.x, y: p.y }));
     const editPts = editLandmarks.map((p) => ({ x: p.x, y: p.y }));
 
-    // Add bounding box corners to anchor surrounding area
+    // ── Expand hull: push landmarks outward from face center ──
+    // The 68-point convex hull is too tight — misses forehead, hairline, jaw sides.
+    // Expand each hull point outward by a factor proportional to face size.
     const editBox = editDetections[match.editIdx].detection.box;
-    const pad = Math.max(editBox.width, editBox.height) * 0.35;
+    const faceSize = Math.max(editBox.width, editBox.height);
+    const pad = faceSize * 0.55; // much wider pad
+
+    const editCenter = {
+      x: editPts.reduce((s, p) => s + p.x, 0) / editPts.length,
+      y: editPts.reduce((s, p) => s + p.y, 0) / editPts.length,
+    };
+    const rawHull = convexHull(editPts);
+    const expandFactor = 1.35; // expand hull 35% outward
+    const expandedHull = rawHull.map((p) => ({
+      x: editCenter.x + (p.x - editCenter.x) * expandFactor,
+      y: editCenter.y + (p.y - editCenter.y) * expandFactor,
+    }));
 
     const editCorners = [
       { x: Math.max(0, editBox.x - pad), y: Math.max(0, editBox.y - pad) },
@@ -627,7 +641,7 @@ export async function restoreFaces(
     ];
 
     const origBox = origDetections[match.origIdx].detection.box;
-    const origPad = Math.max(origBox.width, origBox.height) * 0.35;
+    const origPad = Math.max(origBox.width, origBox.height) * 0.55;
     const origCorners = [
       { x: Math.max(0, origBox.x - origPad), y: Math.max(0, origBox.y - origPad) },
       { x: Math.min(origImg.width, origBox.x + origBox.width + origPad), y: Math.max(0, origBox.y - origPad) },
@@ -635,12 +649,45 @@ export async function restoreFaces(
       { x: Math.min(origImg.width, origBox.x + origBox.width + origPad), y: Math.min(origImg.height, origBox.y + origBox.height + origPad) },
     ];
 
+    // ── Color correction: match original face lighting to edited ──
+    // Sample mean RGB from the inner face area (nose bridge region, landmarks 27-35)
+    const sampleIndices = [27, 28, 29, 30, 31, 32, 33, 34, 35, 39, 42]; // nose + inner eye corners
+    let origMean = [0, 0, 0], editMean = [0, 0, 0];
+    let sampleCount = 0;
+    for (const idx of sampleIndices) {
+      const op = origPts[idx];
+      const ep = editPts[idx];
+      const ox = Math.round(op.x), oy = Math.round(op.y);
+      const ex = Math.round(ep.x), ey = Math.round(ep.y);
+      if (ox >= 0 && ox < origImg.width && oy >= 0 && oy < origImg.height &&
+          ex >= 0 && ex < w && ey >= 0 && ey < h) {
+        const oi = (oy * origImg.width + ox) * 4;
+        const ei = (ey * w + ex) * 4;
+        for (let c = 0; c < 3; c++) {
+          origMean[c] += origData.data[oi + c];
+          editMean[c] += editData.data[ei + c];
+        }
+        sampleCount++;
+      }
+    }
+    // Color correction ratios
+    const colorScale = [1, 1, 1];
+    if (sampleCount > 0) {
+      for (let c = 0; c < 3; c++) {
+        origMean[c] /= sampleCount;
+        editMean[c] /= sampleCount;
+        if (origMean[c] > 10) {
+          colorScale[c] = Math.max(0.7, Math.min(1.4, editMean[c] / origMean[c]));
+        }
+      }
+    }
+
     // Triangulate on the EDITED (destination) points
     const dstPoints = [...editPts, ...editCorners];
     const srcPoints = [...origPts, ...origCorners];
 
     const tris = delaunay(dstPoints);
-    const hull = convexHull(editPts);
+    const featherRadius = pad * 0.7; // much wider feather zone
 
     // For each triangle in the edited image, sample from original image
     for (const tri of tris) {
@@ -651,7 +698,6 @@ export async function restoreFaces(
         srcPoints[tri.a], srcPoints[tri.b], srcPoints[tri.c],
       ];
 
-      // For each pixel in dst triangle, compute where to sample from src (original)
       const mat = affineMatrix(dstTri, srcTri);
 
       const xs = [dstTri[0].x, dstTri[1].x, dstTri[2].x];
@@ -667,7 +713,6 @@ export async function restoreFaces(
             continue;
           }
 
-          // Map to original image coordinates
           const sx = mat[0] * x + mat[1] * y + mat[2];
           const sy = mat[3] * x + mat[4] * y + mat[5];
 
@@ -675,11 +720,13 @@ export async function restoreFaces(
           const sy0 = Math.floor(sy);
           if (sx0 < 0 || sx0 >= origImg.width - 1 || sy0 < 0 || sy0 >= origImg.height - 1) continue;
 
-          // Feather based on distance from face hull
-          const alpha = featherAlpha(x, y, hull, pad * 0.5);
-          if (alpha < 0.01) continue;
+          // Feather based on distance from EXPANDED hull
+          const alpha = featherAlpha(x, y, expandedHull, featherRadius);
+          if (alpha < 0.005) continue;
 
-          // Bilinear sample from ORIGINAL image
+          // Smooth alpha curve (ease-in-out) for more natural blending
+          const smoothAlpha = alpha * alpha * (3 - 2 * alpha);
+
           const fx = sx - sx0;
           const fy = sy - sy0;
           const ow = origImg.width;
@@ -690,14 +737,17 @@ export async function restoreFaces(
 
           const outIdx = (y * w + x) * 4;
           for (let c = 0; c < 3; c++) {
-            const origPixel =
+            let origPixel =
               origData.data[idx00 + c] * (1 - fx) * (1 - fy) +
               origData.data[idx10 + c] * fx * (1 - fy) +
               origData.data[idx01 + c] * (1 - fx) * fy +
               origData.data[idx11 + c] * fx * fy;
 
+            // Apply color correction
+            origPixel = Math.min(255, Math.max(0, origPixel * colorScale[c]));
+
             outData.data[outIdx + c] = Math.round(
-              outData.data[outIdx + c] * (1 - alpha) + origPixel * alpha,
+              outData.data[outIdx + c] * (1 - smoothAlpha) + origPixel * smoothAlpha,
             );
           }
         }
