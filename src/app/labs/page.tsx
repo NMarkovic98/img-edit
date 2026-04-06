@@ -23,6 +23,15 @@ export default function LabsPage() {
   const fcOrigRef = useRef<HTMLInputElement>(null);
   const fcEditRef = useRef<HTMLInputElement>(null);
 
+  // Face Warp state
+  const [warpRunning, setWarpRunning] = useState(false);
+  const [warpResult, setWarpResult] = useState<{
+    correctedDataUrl: string;
+    diffDataUrl: string;
+    facesWarped: number;
+  } | null>(null);
+  const [warpPreviewMode, setWarpPreviewMode] = useState<"corrected" | "diff" | "sidebyside">("sidebyside");
+
   useEffect(() => {
     const saved = localStorage.getItem("bot_url");
     setBotUrl((process.env.NEXT_PUBLIC_BOT_URL || saved || "http://localhost:3099").trim());
@@ -317,7 +326,7 @@ export default function LabsPage() {
                 const f = e.target.files?.[0];
                 if (f) {
                   setFcOriginal(URL.createObjectURL(f));
-                  setFcResult(null);
+                  setFcResult(null); setWarpResult(null);
                 }
               }}
             />
@@ -344,7 +353,7 @@ export default function LabsPage() {
                 const f = e.target.files?.[0];
                 if (f) {
                   setFcEdited(URL.createObjectURL(f));
-                  setFcResult(null);
+                  setFcResult(null); setWarpResult(null);
                 }
               }}
             />
@@ -370,7 +379,7 @@ export default function LabsPage() {
             onBlur={(e) => {
               if (e.target.value.trim()) {
                 setFcOriginal(e.target.value.trim());
-                setFcResult(null);
+                setFcResult(null); setWarpResult(null);
               }
             }}
           />
@@ -381,7 +390,7 @@ export default function LabsPage() {
             onBlur={(e) => {
               if (e.target.value.trim()) {
                 setFcEdited(e.target.value.trim());
-                setFcResult(null);
+                setFcResult(null); setWarpResult(null);
               }
             }}
           />
@@ -526,6 +535,94 @@ export default function LabsPage() {
                   ))}
               </div>
             ) : null}
+          </div>
+        )}
+
+        {/* Fix Faces button — appears after face check with drift */}
+        {fcResult && fcOriginal && fcEdited && !fcResult.noFaceOriginal && !fcResult.noFaceEdited && fcResult.distance > 0.1 && (
+          <button
+            disabled={warpRunning}
+            onClick={async () => {
+              if (!fcOriginal || !fcEdited) return;
+              setWarpRunning(true);
+              setWarpResult(null);
+              try {
+                const { warpFacesBack } = await import("@/lib/face-warp");
+                const result = await warpFacesBack(fcOriginal, fcEdited);
+                setWarpResult(result);
+              } catch (err: any) {
+                alert("Face warp failed: " + (err.message || "Unknown error"));
+              }
+              setWarpRunning(false);
+            }}
+            className={`w-full py-4 rounded-lg font-semibold text-sm transition-colors ${
+              warpRunning
+                ? "bg-purple-600 cursor-wait animate-pulse"
+                : "bg-purple-600 hover:bg-purple-700"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {warpRunning ? "Warping faces back..." : "Fix Faces — Warp Back to Original"}
+          </button>
+        )}
+
+        {/* Warp Result Preview */}
+        {warpResult && (
+          <div className="bg-zinc-900 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">
+                Face Correction Result
+                <span className="text-zinc-400 font-normal ml-2 text-xs">
+                  ({warpResult.facesWarped} face{warpResult.facesWarped !== 1 ? "s" : ""} warped)
+                </span>
+              </h3>
+              <a
+                href={warpResult.correctedDataUrl}
+                download="corrected.png"
+                className="text-xs px-3 py-1.5 bg-green-600 hover:bg-green-700 rounded font-medium"
+              >
+                Download
+              </a>
+            </div>
+
+            {/* Toggle buttons */}
+            <div className="flex gap-1 bg-zinc-800 rounded-lg p-1">
+              {(["sidebyside", "corrected", "diff"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setWarpPreviewMode(mode)}
+                  className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors ${
+                    warpPreviewMode === mode
+                      ? "bg-zinc-600 text-white"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  {mode === "sidebyside" ? "Side by Side" : mode === "corrected" ? "Corrected" : "Diff Map"}
+                </button>
+              ))}
+            </div>
+
+            {/* Preview images */}
+            {warpPreviewMode === "sidebyside" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <span className="text-[10px] text-zinc-500 uppercase font-semibold">Edited (before fix)</span>
+                  <img src={fcEdited!} alt="Edited" className="w-full rounded border border-zinc-700" />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[10px] text-zinc-500 uppercase font-semibold">Corrected (after fix)</span>
+                  <img src={warpResult.correctedDataUrl} alt="Corrected" className="w-full rounded border border-purple-700/50" />
+                </div>
+              </div>
+            ) : warpPreviewMode === "corrected" ? (
+              <img src={warpResult.correctedDataUrl} alt="Corrected" className="w-full rounded border border-purple-700/50" />
+            ) : (
+              <div className="space-y-1">
+                <img src={warpResult.diffDataUrl} alt="Diff" className="w-full rounded border border-zinc-700" />
+                <p className="text-[10px] text-zinc-500">
+                  Heat map: darker = no change, green = minor shift, yellow/red = major pixel displacement (5x amplified)
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
