@@ -106,6 +106,7 @@ function nanoBanana2(
   prompt: string,
   imageUrls: string[],
   resolution: "0.5K" | "1K" | "2K" | "4K" = "1K",
+  dims?: { width: number; height: number },
 ): ModelChoice {
   return {
     modelId: "fal-ai/nano-banana-2/edit",
@@ -115,7 +116,7 @@ function nanoBanana2(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
-      aspect_ratio: "auto",
+      aspect_ratio: dims ? pickAspectRatio(dims.width, dims.height) : "auto",
       output_format: "jpeg",
       safety_tolerance: "6",
       limit_generations: true,
@@ -128,6 +129,7 @@ function nanoBananaPro(
   prompt: string,
   imageUrls: string[],
   resolution: "1K" | "2K" | "4K",
+  dims?: { width: number; height: number },
 ): ModelChoice {
   return {
     modelId: "fal-ai/nano-banana-pro/edit",
@@ -137,7 +139,7 @@ function nanoBananaPro(
       image_urls: imageUrls,
       num_images: 1,
       resolution,
-      aspect_ratio: "auto",
+      aspect_ratio: dims ? pickAspectRatio(dims.width, dims.height) : "auto",
       output_format: "jpeg",
       safety_tolerance: "6",
       limit_generations: true,
@@ -237,6 +239,37 @@ function auraSR(imageUrl: string, scale: 2 | 4 = 2): ModelChoice {
 }
 
 // ---------------------------------------------------------------------------
+// Aspect ratio picker — snap main image dims to nearest supported ratio
+// ---------------------------------------------------------------------------
+const SUPPORTED_RATIOS = [
+  { label: "21:9", value: 21 / 9 },
+  { label: "16:9", value: 16 / 9 },
+  { label: "3:2", value: 3 / 2 },
+  { label: "4:3", value: 4 / 3 },
+  { label: "5:4", value: 5 / 4 },
+  { label: "1:1", value: 1 },
+  { label: "4:5", value: 4 / 5 },
+  { label: "3:4", value: 3 / 4 },
+  { label: "2:3", value: 2 / 3 },
+  { label: "9:16", value: 9 / 16 },
+] as const;
+
+function pickAspectRatio(w: number, h: number): string {
+  const ratio = w / h;
+  let best: (typeof SUPPORTED_RATIOS)[number] = SUPPORTED_RATIOS[0];
+  let bestDiff = Math.abs(ratio - best.value);
+  for (const r of SUPPORTED_RATIOS) {
+    const diff = Math.abs(ratio - r.value);
+    if (diff < bestDiff) {
+      best = r;
+      bestDiff = diff;
+    }
+  }
+  console.log(`[edit] Aspect ratio: ${w}x${h} → ${best.label}`);
+  return best.label;
+}
+
+// ---------------------------------------------------------------------------
 // Resolution-aware Nano Banana resolution picker
 // ---------------------------------------------------------------------------
 function pickNanaBananaRes(w: number, h: number): "0.5K" | "1K" | "2K" | "4K" {
@@ -271,9 +304,9 @@ function buildModelForId(
     case "fal-ai/flux-2-max/edit":
       return flux2Max(prompt, imageUrls, dims);
     case "fal-ai/nano-banana-2/edit":
-      return nanoBanana2(prompt, imageUrls, nbRes);
+      return nanoBanana2(prompt, imageUrls, nbRes, dims);
     case "fal-ai/nano-banana-pro/edit":
-      return nanoBananaPro(prompt, imageUrls, nbProRes);
+      return nanoBananaPro(prompt, imageUrls, nbProRes, dims);
     case "fal-ai/bytedance/seedream/v5/lite/edit":
       return seedream5Lite(prompt, imageUrls, dims);
     case "fal-ai/bytedance/seedream/v4.5/edit":
@@ -332,8 +365,8 @@ function selectModelsForCategory(
       `[edit] 2K-4K image (${dims.width}x${dims.height}) → NBPro 4K / NB2 4K routing`,
     );
     models = [
-      nanoBananaPro(prompt, imageUrls, "4K"),
-      nanoBanana2(prompt, imageUrls, "4K"),
+      nanoBananaPro(prompt, imageUrls, "4K", dims),
+      nanoBanana2(prompt, imageUrls, "4K", dims),
     ];
     // Add compatible category fallbacks (skip low-res-only models)
     for (const id of categoryModelIds) {
@@ -352,7 +385,7 @@ function selectModelsForCategory(
     console.log(
       `[edit] ≤2K image (${dims.width}x${dims.height}) → NBPro 2K routing`,
     );
-    models = [nanoBananaPro(prompt, imageUrls, "2K")];
+    models = [nanoBananaPro(prompt, imageUrls, "2K", dims)];
     // Add category-based fallbacks
     for (const id of categoryModelIds) {
       const fallback = buildModelForId(id, prompt, imageUrl, imageUrls, dims);
@@ -412,7 +445,7 @@ function resolveOverride(
         return flux2Max(prompt, imageUrls, dims);
       }
       const r = pickNanaBananaRes(dims.width, dims.height);
-      return nanoBananaPro(prompt, imageUrls, r === "0.5K" ? "1K" : r);
+      return nanoBananaPro(prompt, imageUrls, r === "0.5K" ? "1K" : r, dims);
     }
     case "seedream-5-lite":
       return seedream5Lite(prompt, imageUrls, dims);
@@ -422,9 +455,9 @@ function resolveOverride(
     case "gpt-image":
       return fluxKontextPro(prompt, imageUrl); // Replaced GPT with Kontext
     case "nano-banana-1k":
-      return nanoBananaPro(prompt, imageUrls, "1K");
+      return nanoBananaPro(prompt, imageUrls, "1K", dims);
     case "nano-banana-2k":
-      return nanoBananaPro(prompt, imageUrls, "2K");
+      return nanoBananaPro(prompt, imageUrls, "2K", dims);
     case "nano-banana-4k": {
       // NB Pro 4K cannot handle images >4096 on any side
       if (Math.max(dims.width, dims.height) > 4096) {
@@ -433,7 +466,7 @@ function resolveOverride(
         );
         return flux2Max(prompt, imageUrls, dims);
       }
-      return nanoBananaPro(prompt, imageUrls, "4K");
+      return nanoBananaPro(prompt, imageUrls, "4K", dims);
     }
     case "seedream-2k":
     case "seedream-4k":
