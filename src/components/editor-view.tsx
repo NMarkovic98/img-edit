@@ -1902,8 +1902,8 @@ export function EditorView() {
                           body: formData,
                         });
                         const result = await botRes.json();
-                        if (result.success) {
-                          alert("Reply posted to Reddit!");
+                        if (result.success || result.status === "queued") {
+                          alert(result.status === "queued" ? "Comment queued — bot is posting..." : "Reply posted to Reddit!");
                         } else {
                           alert(
                             "Bot error: " + (result.error || "Unknown error"),
@@ -1971,8 +1971,8 @@ export function EditorView() {
                           body: formData,
                         });
                         const result = await botRes.json();
-                        if (result.success) {
-                          alert("Reply posted to Reddit!");
+                        if (result.success || result.status === "queued") {
+                          alert(result.status === "queued" ? "Comment queued — bot is posting..." : "Reply posted to Reddit!");
                         } else {
                           alert(
                             "Bot error: " + (result.error || "Unknown error"),
