@@ -664,7 +664,6 @@ export async function POST(request: NextRequest) {
       author,
       postId,
       applyCorrections: shouldCorrect,
-      skipAnalysisHints: rawSkipAnalysisHints,
     } = await request.json();
 
     if (!rawImageUrl || !changeSummary) {
@@ -681,7 +680,7 @@ export async function POST(request: NextRequest) {
     const faceEdit: boolean = hasFaceEdit ?? false;
     const facePres: "strict" | "light" | "none" = rawFacePreservation || "strict";
     const aiPolicy: AiPolicy = rawAiPolicy || "unknown";
-    const skipAnalysisHints: boolean = rawSkipAnalysisHints ?? false;
+
 
     console.log(
       `[edit] Category: ${category} | Face edit: ${faceEdit} | AI policy: ${aiPolicy}`,
@@ -752,62 +751,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Analyze image quality (12 checks: exposure, contrast, saturation, color cast,
-    // dynamic range, highlight/shadow clipping, color temp, tonal compression,
-    // sharpness, noise, vignetting)
-    // Skip for categories where color corrections don't make sense
+    // Run image quality analysis for metrics logging (not added to prompt)
+    let analysisMetrics: Record<string, number> | undefined;
     const SKIP_ANALYSIS_CATEGORIES: EditCategory[] = [
       "remove_background",
       "text_edit",
       "creative_fun",
     ];
-    let qualityHints = "";
-    let analysisMetrics: Record<string, number> | undefined;
     if (imageBuf && !SKIP_ANALYSIS_CATEGORIES.includes(category)) {
       const analysis = await analyzeImageQuality(imageBuf);
       analysisMetrics = analysis.metrics;
       if (analysis.hints.length > 0) {
         console.log(`[edit] ${analysis.summary}`);
         console.log(`[edit] Metrics: ${JSON.stringify(analysis.metrics)}`);
-        // Skip hints if: NO AI policy, or user explicitly opted out
-        if (aiPolicy !== "no_ai" && !skipAnalysisHints) {
-          qualityHints =
-            "\n\nAlso subtly improve the following image quality issues while performing the edit (apply corrections naturally, do not overcorrect): " +
-            analysis.hints.join(" ");
-        } else if (skipAnalysisHints) {
-          console.log("[edit] Analysis hints skipped (user opt-out)");
-        }
       } else {
         console.log("[edit] Image quality OK — no corrections needed");
       }
     }
 
-    // Build prompt — two modes:
-    // no_ai: surgical edit, preserve pose/position/expression exactly, zero visible changes beyond the request
-    // ai_ok: identity must be preserved, but minor face adjustments allowed to fulfill the request
-    const hasReferences = imageUrls.length > 1;
-
-    // Category-specific hints (keep short, one sentence max)
-    let categoryHint = "";
-    if (category === "remove_object" || category === "remove_background") {
-      categoryHint = " Fill removed areas with matching background — correct perspective, lighting and texture.";
-    } else if (category === "restore_old_photo") {
-      categoryHint = " Restore uniformly across the entire frame, not just faces.";
-    }
-
-    let rules: string;
-    if (aiPolicy === "no_ai") {
-      // Strictest: nothing moves, nothing changes except the specific edit
-      rules = "Keep every person's exact pose, position, expression and appearance. Do not move, reshape or alter anything except what was specifically requested. The edit must be undetectable. Maintain natural skin texture.";
-    } else if (faceEdit) {
-      // AI OK + touching faces: identity locked, minor adjustments allowed
-      rules = "Preserve every person's facial identity — same bone structure, eyes, nose, mouth, skin. Apply only the requested change to the face. Keep natural skin texture with pores. Do not change anything else.";
-    } else {
-      // AI OK + not touching faces: standard preservation
-      rules = "Do not alter any person's face, expression or identity. Only change what was requested. Keep everything else identical.";
-    }
-
-    const prompt = `${changeSummary}${categoryHint} ${rules}${qualityHints}`;
+    // Prompt comes directly from Gemini parse — no extra rules/hints added
+    const prompt = changeSummary;
 
     // Select models: user override → category-based smart routing
     let models: ModelChoice[];
