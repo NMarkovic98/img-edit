@@ -23,6 +23,7 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { ImageCompare } from "@/components/image-compare";
+import { applyWatermarkToCanvas } from "@/components/editor-view";
 import { useRouter } from "next/navigation";
 import { usePushNotifications } from "@/lib/notification-provider";
 import { authedFetch } from "@/lib/api";
@@ -49,6 +50,34 @@ function LabsInline() {
   const [progress, setProgress] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Watermark preview
+  const [wmImage, setWmImage] = useState<string | null>(null);
+  const [wmPreview, setWmPreview] = useState<string | null>(null);
+  const wmFileRef = useRef<HTMLInputElement>(null);
+
+  const generateWmPreview = useCallback((src: string) => {
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const maxDim = 1200;
+      let w = img.naturalWidth;
+      let h = img.naturalHeight;
+      if (Math.max(w, h) > maxDim) {
+        const ratio = maxDim / Math.max(w, h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, w, h);
+      applyWatermarkToCanvas(ctx, w, h);
+      setWmPreview(canvas.toDataURL("image/jpeg", 0.92));
+    };
+    img.src = src;
+  }, []);
 
   // Face Check
   const [fcOriginal, setFcOriginal] = useState<string | null>(null);
@@ -256,6 +285,93 @@ function LabsInline() {
               {l}
             </div>
           ))
+        )}
+      </div>
+
+      {/* ── Watermark Preview ── */}
+      <div className="border-t pt-4 mt-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-orange-500" />
+          <h2 className="font-semibold text-sm">Watermark Preview</h2>
+          <span className="text-xs text-muted-foreground">— preview before sending</span>
+        </div>
+
+        <input
+          ref={wmFileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              const url = URL.createObjectURL(f);
+              setWmImage(url);
+              generateWmPreview(url);
+            }
+          }}
+        />
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => wmFileRef.current?.click()}
+            className="flex-1 px-3 py-2 bg-muted hover:bg-muted/80 rounded text-sm border border-dashed"
+          >
+            {wmImage ? "Change image" : "Upload image to preview watermark"}
+          </button>
+          {wmImage && (
+            <button
+              onClick={() => generateWmPreview(wmImage)}
+              className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded text-sm font-medium"
+            >
+              Refresh
+            </button>
+          )}
+        </div>
+
+        <input
+          type="text"
+          placeholder="Or paste image URL and press Enter"
+          className="w-full bg-muted rounded px-3 py-2 text-sm border"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const val = (e.target as HTMLInputElement).value.trim();
+              if (val) {
+                setWmImage(val);
+                generateWmPreview(val);
+              }
+            }
+          }}
+        />
+
+        {wmPreview && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground uppercase font-semibold">Original</span>
+                <img src={wmImage!} alt="Original" className="w-full rounded border" />
+              </div>
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground uppercase font-semibold">Watermarked</span>
+                <img src={wmPreview} alt="Watermarked" className="w-full rounded border border-orange-500/30" />
+              </div>
+            </div>
+
+            <details>
+              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                View full size
+              </summary>
+              <img src={wmPreview} alt="Watermarked full" className="w-full rounded border mt-2" />
+            </details>
+
+            <a
+              href={wmPreview}
+              download={`fixtral-watermarked-${Date.now()}.jpg`}
+              className="inline-flex items-center gap-2 text-xs px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded font-medium"
+            >
+              <Download className="h-3 w-3" />
+              Download Watermarked
+            </a>
+          </div>
         )}
       </div>
 

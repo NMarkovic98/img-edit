@@ -325,6 +325,104 @@ function DimensionsBadge({ src }: { src: string }) {
 // ---------------------------------------------------------------------------
 // Client-side watermark generator — Canvas only, no AI model
 // ---------------------------------------------------------------------------
+function applyWatermarkToCanvas(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+) {
+  const long = Math.max(w, h);
+  const short = Math.min(w, h);
+
+  // ── Analyze image brightness ──
+  // Sample pixels across the image to determine if it's light or dark.
+  // Use a downsampled grid for speed — ~2500 samples is plenty.
+  const sampleStep = Math.max(1, Math.floor(short / 50));
+  let totalBrightness = 0;
+  let sampleCount = 0;
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const px = imgData.data;
+  for (let y = 0; y < h; y += sampleStep) {
+    for (let x = 0; x < w; x += sampleStep) {
+      const i = (y * w + x) * 4;
+      // Perceived brightness (ITU-R BT.601)
+      totalBrightness += px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+      sampleCount++;
+    }
+  }
+  const avgBrightness = totalBrightness / sampleCount; // 0-255
+
+  // Pick watermark color based on brightness:
+  // Dark image (avg < 100) → white lines
+  // Light image (avg > 160) → dark lines
+  // Mid range → blend between the two
+  const t = Math.max(0, Math.min(1, (avgBrightness - 100) / 60)); // 0=dark image, 1=light image
+  // Primary color: interpolate from white to black
+  const primary = Math.round(255 * (1 - t)); // 255 (white on dark img) → 0 (black on light img)
+  const primaryColor = `rgb(${primary},${primary},${primary})`;
+
+  // Scale lineWidth and opacity for resolution
+  // On 4K (short~2160): lw~7.2, on 1080p: lw~3.6
+  const lw = Math.max(2, short / 300);
+  // Resolution boost: 1.0 at 1000px, scales up for larger images
+  const resBoost = Math.max(1, long / 1000);
+  // Light images need stronger opacity — dark lines on white are harder to see
+  const brightnessBoost = 1 + t * 1.2; // 1.0 for dark images, 2.2 for light images
+  const alphaBoost = Math.min(4.0, resBoost * brightnessBoost);
+
+  // ── Perfect honeycomb tessellation ──
+  const r = Math.max(30, short * 0.045);
+  const hexW = r * 2;
+  const hexH = r * Math.sqrt(3);
+  const colStep = hexW * 0.75;
+  const rowStep = hexH;
+
+  function drawHex(cx: number, cy: number, radius: number) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i;
+      const px = cx + radius * Math.cos(a);
+      const py = cy + radius * Math.sin(a);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  // Honeycomb grid — only the hex outlines, nothing inside
+  ctx.save();
+  ctx.globalAlpha = Math.min(0.35, 0.07 * alphaBoost);
+  ctx.strokeStyle = primaryColor;
+  ctx.lineWidth = lw;
+  for (let col = -1; col * colStep < w + hexW; col++) {
+    const cx = col * colStep;
+    const yOff = col % 2 === 0 ? 0 : hexH / 2;
+    for (let row = -1; row * rowStep < h + hexH; row++) {
+      const cy = row * rowStep + yOff;
+      drawHex(cx, cy, r);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  // Corner marks
+  const cornerFs = Math.max(11, short * 0.012);
+  const pad = cornerFs * 2;
+  ctx.save();
+  ctx.globalAlpha = Math.min(0.25, 0.1 * alphaBoost);
+  ctx.font = `400 ${cornerFs}px -apple-system, sans-serif`;
+  ctx.fillStyle = primaryColor;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText("PixelFixer", pad, pad);
+  ctx.textAlign = "right";
+  ctx.fillText("PixelFixer", w - pad, pad);
+  ctx.textBaseline = "bottom";
+  ctx.fillText("PixelFixer", w - pad, h - pad);
+  ctx.textAlign = "left";
+  ctx.fillText("PixelFixer", pad, h - pad);
+  ctx.restore();
+}
+
 async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
@@ -335,44 +433,8 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d")!;
 
-      // Draw original image at full quality
       ctx.drawImage(img, 0, 0);
-
-      const w = canvas.width;
-      const h = canvas.height;
-      // Diagonal so no straight crop removes it — use the full diagonal length
-      const diag = Math.ceil(Math.sqrt(w * w + h * h));
-      const short = Math.min(w, h);
-
-      // Helper: draw one full-coverage tiled pass at given angle
-      function drawTile(
-        text: string,
-        angle: number,
-        alpha: number,
-        spacing: number,
-        fSize: number,
-      ) {
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.font = `500 ${fSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-        ctx.translate(w / 2, h / 2);
-        ctx.rotate(angle);
-        // Cover the full rotated diagonal in every direction
-        for (let y = -diag; y < diag; y += spacing) {
-          for (let x = -diag; x < diag; x += spacing) {
-            ctx.fillStyle = "rgba(0,0,0,0.45)";
-            ctx.fillText(text, x + 1.5, y + 1.5);
-            ctx.fillStyle = "rgba(255,255,255,0.95)";
-            ctx.fillText(text, x, y);
-          }
-        }
-        ctx.restore();
-      }
-
-      const fs = Math.max(14, Math.floor(short * 0.022));
-      // Two overlapping grids at different angles → impossible to crop clean
-      drawTile("© preview", -Math.PI / 5, 0.12, fs * 6, fs);
-      drawTile("© preview", Math.PI / 7, 0.07, fs * 8, fs * 0.85);
+      applyWatermarkToCanvas(ctx, canvas.width, canvas.height);
 
       canvas.toBlob(
         (blob) => {
@@ -387,6 +449,9 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
     img.src = imageUrl;
   });
 }
+
+// Exported for labs preview
+export { applyWatermarkToCanvas };
 
 interface RedditPost {
   id: string;
@@ -645,11 +710,7 @@ export function EditorView() {
 
     setIsEditing(true);
 
-    const isRestore =
-      currentItem.editCategory === "restore_old_photo" || restoreMode;
-
-    let enhancedPrompt = editPrompt.trim();
-    if (isRestore) enhancedPrompt += " Restore the entire frame uniformly, not just faces. If the photo is photographed on a surface (table, desk, scanner bed), crop to only the original photo and straighten it.";
+    const enhancedPrompt = editPrompt.trim();
 
     try {
       const controller = new AbortController();
@@ -672,9 +733,6 @@ export function EditorView() {
           aiPolicy: currentItem.aiPolicy || "unknown",
           author: currentItem.post.author || "unknown",
           postId: currentItem.post.id || "unknown",
-          applyCorrections:
-            correctionsEnabled && correctionPreview?.hasCorrections,
-          skipAnalysisHints: !analysisHintsEnabled,
         }),
       });
 
@@ -1093,160 +1151,6 @@ export function EditorView() {
             </CardContent>
           </Card>
 
-          {/* Sharp Corrections */}
-          <Card className="shadow-lg border-muted/20">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center space-x-2 text-sm">
-                  <Sparkles className="h-4 w-4 text-amber-500" />
-                  <span>Image Corrections (Sharp)</span>
-                </CardTitle>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={previewCorrections}
-                  disabled={correctionsLoading || !currentItem}
-                  className="text-xs"
-                >
-                  {correctionsLoading ? (
-                    <>
-                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>Preview Corrections</>
-                  )}
-                </Button>
-              </div>
-              <CardDescription className="text-xs">
-                Deterministic fixes (exposure, contrast, color, sharpness)
-                applied before AI — no resolution or quality loss.
-              </CardDescription>
-            </CardHeader>
-            {correctionPreview && (
-              <CardContent className="space-y-3">
-                {!correctionPreview.hasCorrections ? (
-                  <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
-                    <CheckCircle className="h-4 w-4" />
-                    Image quality OK — no corrections needed.
-                  </div>
-                ) : (
-                  <>
-                    {/* Toggle */}
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={correctionsEnabled}
-                        onClick={() =>
-                          setCorrectionsEnabled(!correctionsEnabled)
-                        }
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          correctionsEnabled
-                            ? "bg-amber-500"
-                            : "bg-muted-foreground/30"
-                        }`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            correctionsEnabled
-                              ? "translate-x-6"
-                              : "translate-x-1"
-                          }`}
-                        />
-                      </button>
-                      <span className="text-sm font-medium">
-                        {correctionsEnabled
-                          ? "Corrections ON — corrected image will be sent to AI"
-                          : "Corrections OFF — original image will be sent to AI"}
-                      </span>
-                    </label>
-
-                    {/* Applied corrections list */}
-                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-1.5">
-                      <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-                        {correctionPreview.applied.length} correction
-                        {correctionPreview.applied.length !== 1 ? "s" : ""}{" "}
-                        detected:
-                      </p>
-                      <ul className="text-xs text-muted-foreground space-y-0.5">
-                        {correctionPreview.applied.map((c, i) => (
-                          <li key={i}>• {c}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    {/* Before/After comparison */}
-                    {correctionPreview.correctedImageUrl && (
-                      <div className="space-y-2">
-                        <p className="text-xs text-muted-foreground">
-                          Drag slider to compare original vs corrected:
-                        </p>
-                        <ImageCompare
-                          originalSrc={currentItem.post.imageUrl}
-                          editedSrc={correctionPreview.correctedImageUrl}
-                          className="w-full"
-                        />
-                      </div>
-                    )}
-
-                    {/* Metrics */}
-                    <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                      {Object.entries(correctionPreview.analysis.metrics).map(
-                        ([k, v]) => (
-                          <span
-                            key={k}
-                            className="px-1.5 py-0.5 rounded bg-muted/50 font-mono"
-                          >
-                            {k}:{" "}
-                            {typeof v === "number"
-                              ? Math.round(v * 100) / 100
-                              : v}
-                          </span>
-                        ),
-                      )}
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            )}
-          </Card>
-
-          {/* Analysis Hints Toggle */}
-          <Card className="shadow-lg border-muted/20">
-            <CardContent className="py-3 px-4">
-              <label className="flex items-center gap-3 cursor-pointer">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={analysisHintsEnabled}
-                  onClick={() => setAnalysisHintsEnabled(!analysisHintsEnabled)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
-                    analysisHintsEnabled
-                      ? "bg-blue-500"
-                      : "bg-muted-foreground/30"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      analysisHintsEnabled ? "translate-x-6" : "translate-x-1"
-                    }`}
-                  />
-                </button>
-                <div>
-                  <span className="text-sm font-medium">
-                    {analysisHintsEnabled
-                      ? "Analysis hints ON — AI will also fix detected quality issues"
-                      : "Analysis hints OFF — AI will only follow your prompt"}
-                  </span>
-                  <p className="text-[10px] text-muted-foreground">
-                    When on, detected issues (exposure, contrast, etc.) are
-                    appended to the AI prompt
-                  </p>
-                </div>
-              </label>
-            </CardContent>
-          </Card>
 
           {/* Final Prompt Preview */}
           {editPrompt.trim() && (
@@ -1255,29 +1159,7 @@ export function EditorView() {
                 Preview final prompt sent to AI
               </summary>
               <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-muted text-xs font-mono whitespace-pre-wrap max-h-[200px] overflow-y-auto">
-                {(() => {
-                  const hasPeople = currentItem?.hasFaceEdit === true;
-                  const isRestore = currentItem?.editCategory === "restore_old_photo" || restoreMode;
-                  const aiPolicy = currentItem?.aiPolicy || "unknown";
-
-                  let preview = editPrompt.trim();
-                  if (isRestore) preview += " Restore the entire frame uniformly, not just faces. If the photo is photographed on a surface (table, desk, scanner bed), crop to only the original photo and straighten it.";
-
-                  // Backend rules preview
-                  if (aiPolicy === "no_ai") {
-                    preview += " Keep every person's exact pose, position, expression and appearance. Do not move, reshape or alter anything except what was specifically requested. The edit must be undetectable. Maintain natural skin texture.";
-                  } else if (hasPeople) {
-                    preview += " Preserve every person's facial identity — same bone structure, eyes, nose, mouth, skin. Apply only the requested change to the face. Keep natural skin texture with pores. Do not change anything else.";
-                  } else {
-                    preview += " Do not alter any person's face, expression or identity. Only change what was requested. Keep everything else identical.";
-                  }
-
-                  if (analysisHintsEnabled) {
-                    preview += "\n[+ quality hints if issues detected]";
-                  }
-
-                  return preview;
-                })()}
+                {editPrompt.trim()}
               </div>
             </details>
           )}
@@ -1299,22 +1181,6 @@ export function EditorView() {
                 <>
                   <Wand2 className="mr-3 h-5 w-5" />
                   Generate Edited Image
-                  {correctionsEnabled && correctionPreview?.hasCorrections && (
-                    <Badge
-                      variant="secondary"
-                      className="ml-2 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                    >
-                      + Corrections
-                    </Badge>
-                  )}
-                  {!analysisHintsEnabled && (
-                    <Badge
-                      variant="secondary"
-                      className="ml-1 text-[10px] bg-muted text-muted-foreground border-border"
-                    >
-                      No Hints
-                    </Badge>
-                  )}
                 </>
               )}
             </Button>

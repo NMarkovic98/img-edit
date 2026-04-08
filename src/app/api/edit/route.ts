@@ -6,7 +6,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { fal } from "@fal-ai/client";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 import { uploadToCloudinary } from "@/lib/cloudinary";
-import { analyzeImageQuality, applyCorrections } from "@/lib/image-analysis";
 import type { EditCategory, AiPolicy } from "@/types";
 import { CATEGORY_MODEL_MAP, FACE_SAFE_MODELS } from "@/types";
 
@@ -663,7 +662,6 @@ export async function POST(request: NextRequest) {
       aiPolicy: rawAiPolicy,
       author,
       postId,
-      applyCorrections: shouldCorrect,
     } = await request.json();
 
     if (!rawImageUrl || !changeSummary) {
@@ -721,56 +719,9 @@ export async function POST(request: NextRequest) {
       `[edit] Input: ${mainDims.width}x${mainDims.height} → tier: ${tier}`,
     );
 
-    // Apply deterministic sharp corrections if requested
-    let correctionApplied = false;
-    if (shouldCorrect && imageBuf) {
-      try {
-        const correction = await applyCorrections(imageBuf);
-        if (correction.applied.length > 0) {
-          console.log(
-            `[edit] Applying ${correction.applied.length} sharp correction(s)`,
-          );
-          // Upload corrected image to Cloudinary as temporary
-          const correctedDataUrl = `data:image/png;base64,${correction.buffer.toString("base64")}`;
-          const correctedUpload = await uploadToCloudinary(correctedDataUrl, {
-            author: author || "unknown",
-            postId: `corrected_${postId || "unknown"}`,
-          });
-          if (correctedUpload?.secure_url) {
-            imageUrl = correctedUpload.secure_url;
-            imageUrls[0] = imageUrl;
-            correctionApplied = true;
-            console.log(`[edit] Using corrected image: ${imageUrl}`);
-          }
-        }
-      } catch (corrErr) {
-        console.warn(
-          "[edit] Sharp corrections failed (non-blocking):",
-          corrErr,
-        );
-      }
-    }
-
-    // Run image quality analysis for metrics logging (not added to prompt)
-    let analysisMetrics: Record<string, number> | undefined;
-    const SKIP_ANALYSIS_CATEGORIES: EditCategory[] = [
-      "remove_background",
-      "text_edit",
-      "creative_fun",
-    ];
-    if (imageBuf && !SKIP_ANALYSIS_CATEGORIES.includes(category)) {
-      const analysis = await analyzeImageQuality(imageBuf);
-      analysisMetrics = analysis.metrics;
-      if (analysis.hints.length > 0) {
-        console.log(`[edit] ${analysis.summary}`);
-        console.log(`[edit] Metrics: ${JSON.stringify(analysis.metrics)}`);
-      } else {
-        console.log("[edit] Image quality OK — no corrections needed");
-      }
-    }
-
     // Prompt comes directly from Gemini parse — no extra rules/hints added
     const prompt = changeSummary;
+    const correctionApplied = false;
 
     // Select models: user override → category-based smart routing
     let models: ModelChoice[];
@@ -886,7 +837,7 @@ export async function POST(request: NextRequest) {
       generatedImages: [editedUrl],
       cloudinaryUrl,
       cloudinaryPublicId,
-      imageAnalysis: analysisMetrics || undefined,
+      imageAnalysis: undefined,
       correctionApplied,
       originalDimensions: mainDims,
       outputDimensions: editedDims?.width
