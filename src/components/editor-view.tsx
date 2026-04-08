@@ -362,12 +362,10 @@ function applyWatermarkToCanvas(
 
   // Scale lineWidth and opacity for resolution
   // On 4K (short~2160): lw~7.2, on 1080p: lw~3.6
-  const lw = Math.max(2, short / 300);
-  // Resolution boost: 1.0 at 1000px, scales up for larger images
-  const resBoost = Math.max(1, long / 1000);
-  // Light images need stronger opacity — dark lines on white are harder to see
-  const brightnessBoost = 1 + t * 1.2; // 1.0 for dark images, 2.2 for light images
-  const alphaBoost = Math.min(4.0, resBoost * brightnessBoost);
+  const lw = Math.max(1.5, short / 500);
+  const resBoost = Math.max(1, long / 1500);
+  const brightnessBoost = 1 + t * 0.5;
+  const alphaBoost = Math.min(2.0, resBoost * brightnessBoost);
 
   // ── Perfect honeycomb tessellation ──
   const r = Math.max(30, short * 0.045);
@@ -390,7 +388,7 @@ function applyWatermarkToCanvas(
 
   // Honeycomb grid — only the hex outlines, nothing inside
   ctx.save();
-  ctx.globalAlpha = Math.min(0.35, 0.07 * alphaBoost);
+  ctx.globalAlpha = Math.min(0.12, 0.04 * alphaBoost);
   ctx.strokeStyle = primaryColor;
   ctx.lineWidth = lw;
   for (let col = -1; col * colStep < w + hexW; col++) {
@@ -408,7 +406,7 @@ function applyWatermarkToCanvas(
   const cornerFs = Math.max(11, short * 0.012);
   const pad = cornerFs * 2;
   ctx.save();
-  ctx.globalAlpha = Math.min(0.25, 0.1 * alphaBoost);
+  ctx.globalAlpha = Math.min(0.10, 0.05 * alphaBoost);
   ctx.font = `400 ${cornerFs}px -apple-system, sans-serif`;
   ctx.fillStyle = primaryColor;
   ctx.textBaseline = "top";
