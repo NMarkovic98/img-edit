@@ -183,9 +183,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Normalize images — support both single image and array
+    // Limit to main + 4 references max (5 total) to stay within token budget
     let allImages: ImageInput[];
     if (reqBody.images && reqBody.images.length > 0) {
-      allImages = reqBody.images;
+      allImages = reqBody.images.slice(0, 5);
     } else if (reqBody.imageBase64) {
       allImages = [
         {
