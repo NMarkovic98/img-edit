@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QueueView } from "@/components/queue-view";
 import { EditorView } from "@/components/editor-view";
+import { MyCommentsView } from "@/components/my-comments-view";
 import { ImageViewerProvider } from "@/components/image-viewer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -21,6 +22,7 @@ import {
   X,
   Cloud,
   FlaskConical,
+  MessageSquare,
 } from "lucide-react";
 import { ImageCompare } from "@/components/image-compare";
 import { applyWatermarkToCanvas } from "@/components/editor-view";
@@ -1190,7 +1192,7 @@ export default function Dashboard() {
             onValueChange={handleTabChange}
             className="w-full"
           >
-            <TabsList className="grid w-full max-w-full grid-cols-3 h-10 sm:h-11 p-1 bg-muted/50 border overflow-hidden">
+            <TabsList className="grid w-full max-w-full grid-cols-4 h-10 sm:h-11 p-1 bg-muted/50 border overflow-hidden">
               <TabsTrigger
                 value="queue"
                 className="flex items-center justify-center gap-1.5 h-8 sm:h-9 rounded-md font-medium text-xs sm:text-sm data-[state=active]:bg-background data-[state=active]:shadow-sm min-w-0"
@@ -1211,6 +1213,13 @@ export default function Dashboard() {
                 )}
               </TabsTrigger>
               <TabsTrigger
+                value="my-comments"
+                className="flex items-center justify-center gap-1.5 h-8 sm:h-9 rounded-md font-medium text-xs sm:text-sm data-[state=active]:bg-background data-[state=active]:shadow-sm min-w-0"
+              >
+                <MessageSquare className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">Comments</span>
+              </TabsTrigger>
+              <TabsTrigger
                 value="labs"
                 className="flex items-center justify-center gap-1.5 h-8 sm:h-9 rounded-md font-medium text-xs sm:text-sm data-[state=active]:bg-background data-[state=active]:shadow-sm min-w-0"
               >
@@ -1229,6 +1238,12 @@ export default function Dashboard() {
               className={`mt-3 sm:mt-4 ${activeTab === "editor" ? "" : "hidden"}`}
             >
               <EditorView />
+            </div>
+
+            <div
+              className={`mt-3 sm:mt-4 ${activeTab === "my-comments" ? "" : "hidden"}`}
+            >
+              <MyCommentsView />
             </div>
 
             <div
