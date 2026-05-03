@@ -9,6 +9,7 @@ import {
 } from "react";
 import { X, Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
 import Image from "next/image";
+import { DimensionsBadge } from "./editor-view";
 
 interface ImageViewerProps {
   src: string;
@@ -244,6 +245,7 @@ export function ImageViewer({
             onDoubleClick={handleImageDoubleClick}
             style={{ imageRendering: zoom > 1 ? "auto" : "auto" }}
           />
+          <DimensionsBadge src={src} />
 
           {/* Image info overlay */}
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 rounded-b-lg">

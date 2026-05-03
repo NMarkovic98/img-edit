@@ -30,9 +30,17 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  Upload,
+  Send,
+  X,
 } from "lucide-react";
 import Image from "next/image";
 import { useImageViewer } from "./image-viewer";
+import {
+  applyWatermarkPreservingFormat,
+  isBlockedBotAuthor,
+  DimensionsBadge,
+} from "./editor-view";
 
 interface RedditPost {
   id: string;
@@ -423,6 +431,15 @@ export function QueueView() {
     Record<string, { w: number; h: number }>
   >({});
   const [postModel, setPostModel] = useState<Record<string, string>>({});
+  const [manualImage, setManualImage] = useState<
+    Record<string, { file: File; previewUrl: string }>
+  >({});
+  const [sendingBot, setSendingBot] = useState<
+    Record<string, "watermarked" | "nowatermark" | null>
+  >({});
+  const [postUrlOverride, setPostUrlOverride] = useState<
+    Record<string, string>
+  >({});
   const [subredditIcons, setSubredditIcons] = useState<Record<string, string | null>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
@@ -726,6 +743,98 @@ export function QueueView() {
         storageArea: localStorage,
       }),
     );
+  };
+
+  const setManualImageForPost = (postId: string, file: File) => {
+    setManualImage((prev) => {
+      const old = prev[postId];
+      if (old) URL.revokeObjectURL(old.previewUrl);
+      return {
+        ...prev,
+        [postId]: { file, previewUrl: URL.createObjectURL(file) },
+      };
+    });
+  };
+
+  const clearManualImage = (postId: string) => {
+    setManualImage((prev) => {
+      const old = prev[postId];
+      if (old) URL.revokeObjectURL(old.previewUrl);
+      const next = { ...prev };
+      delete next[postId];
+      return next;
+    });
+  };
+
+  const sendManualToBot = async (
+    post: RedditPost,
+    mode: "watermarked" | "nowatermark",
+  ) => {
+    if (isBlockedBotAuthor(post.author)) {
+      alert(`Sending blocked: u/${post.author} is on the do-not-send list`);
+      return;
+    }
+    const m = manualImage[post.id];
+    if (!m) return;
+
+    const targetUrl = (postUrlOverride[post.id] ?? post.postUrl).trim();
+    if (!targetUrl) {
+      alert("Reddit post URL is required");
+      return;
+    }
+    if (targetUrl !== post.postUrl) {
+      const ok = window.confirm(
+        `You're about to send to a custom URL:\n\n${targetUrl}\n\nOriginal post URL was:\n${post.postUrl}\n\nProceed?`,
+      );
+      if (!ok) return;
+    }
+
+    setSendingBot((prev) => ({ ...prev, [post.id]: mode }));
+    try {
+      let blob: Blob = m.file;
+      let filename = m.file.name || `manual-${Date.now()}.jpg`;
+
+      if (mode === "watermarked") {
+        const result = await applyWatermarkPreservingFormat(m.file);
+        blob = result.blob;
+        filename = result.filename;
+      }
+
+      const formData = new FormData();
+      formData.append("image", blob, filename);
+      formData.append("redditUrl", targetUrl);
+      const paypal = localStorage.getItem("paypal_link") || "";
+      if (paypal) formData.append("paypalLink", paypal);
+      const botUrl = (
+        process.env.NEXT_PUBLIC_BOT_URL ||
+        localStorage.getItem("bot_url") ||
+        "http://localhost:3099"
+      ).trim();
+      const botSecret =
+        localStorage.getItem("bot_secret") ||
+        process.env.NEXT_PUBLIC_BOT_SECRET ||
+        "";
+      if (botSecret) formData.append("secret", botSecret);
+
+      const botRes = await fetch(`${botUrl}/reply`, {
+        method: "POST",
+        body: formData,
+      });
+      const result = await botRes.json();
+      if (result.success || result.status === "queued") {
+        alert(
+          result.status === "queued"
+            ? "Comment queued — bot is posting..."
+            : "Reply posted to Reddit!",
+        );
+      } else {
+        alert("Bot error: " + (result.error || "Unknown error"));
+      }
+    } catch (err: any) {
+      alert("Could not reach bot: " + err.message);
+    } finally {
+      setSendingBot((prev) => ({ ...prev, [post.id]: null }));
+    }
   };
 
   // Fetch on mount and when subreddits change
@@ -1332,6 +1441,168 @@ export function QueueView() {
                               </Button>
                             </div>
                           </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Manual Photoshop upload + bot send */}
+                    {(() => {
+                      const m = manualImage[post.id];
+                      const sending = sendingBot[post.id] || null;
+                      const blocked = isBlockedBotAuthor(post.author);
+                      return (
+                        <div className="border-t pt-2 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                              Manual Edit Upload
+                            </span>
+                            {blocked && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 border-red-400 text-red-500"
+                              >
+                                Blocked author
+                              </Badge>
+                            )}
+                          </div>
+                          {!m ? (
+                            <label className="flex items-center gap-2 cursor-pointer text-xs px-2.5 py-1.5 rounded-md border border-dashed border-muted-foreground/40 hover:bg-muted/50 transition-colors">
+                              <Upload className="h-3.5 w-3.5" />
+                              <span>Choose Photoshop file…</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (f) setManualImageForPost(post.id, f);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <div className="relative">
+                                  <img
+                                    src={m.previewUrl}
+                                    alt="Manual upload preview"
+                                    className="h-14 w-14 object-cover rounded border cursor-pointer"
+                                    onClick={() =>
+                                      showImage(
+                                        m.previewUrl,
+                                        m.file.name,
+                                        m.previewUrl,
+                                        post.postUrl,
+                                      )
+                                    }
+                                  />
+                                  <DimensionsBadge src={m.previewUrl} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[11px] font-medium truncate">
+                                    {m.file.name}
+                                  </p>
+                                  <p className="text-[10px] text-muted-foreground">
+                                    {(m.file.size / 1024 / 1024).toFixed(2)} MB
+                                    {" · "}
+                                    {m.file.type || "image"}
+                                  </p>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() => clearManualImage(post.id)}
+                                  disabled={sending !== null}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                              {(() => {
+                                const currentUrl =
+                                  postUrlOverride[post.id] ?? post.postUrl;
+                                const edited = currentUrl !== post.postUrl;
+                                return (
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between">
+                                      <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                                        Reddit Post URL
+                                      </label>
+                                      {edited && (
+                                        <button
+                                          type="button"
+                                          className="text-[10px] text-blue-500 hover:underline"
+                                          onClick={() =>
+                                            setPostUrlOverride((prev) => {
+                                              const next = { ...prev };
+                                              delete next[post.id];
+                                              return next;
+                                            })
+                                          }
+                                        >
+                                          Reset
+                                        </button>
+                                      )}
+                                    </div>
+                                    <input
+                                      type="text"
+                                      value={currentUrl}
+                                      onChange={(e) =>
+                                        setPostUrlOverride((prev) => ({
+                                          ...prev,
+                                          [post.id]: e.target.value,
+                                        }))
+                                      }
+                                      disabled={sending !== null}
+                                      spellCheck={false}
+                                      className={`w-full px-2 py-1 text-[11px] font-mono rounded-md border bg-background ${
+                                        edited
+                                          ? "border-amber-500/60"
+                                          : "border-input"
+                                      }`}
+                                    />
+                                  </div>
+                                );
+                              })()}
+                              <div className="flex gap-1.5">
+                                <Button
+                                  size="sm"
+                                  className="flex-1 h-8 bg-orange-600 hover:bg-orange-700 text-white text-xs"
+                                  disabled={sending !== null || blocked}
+                                  onClick={() =>
+                                    sendManualToBot(post, "watermarked")
+                                  }
+                                >
+                                  {sending === "watermarked" ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Send className="mr-1 h-3 w-3" />
+                                      Watermarked
+                                    </>
+                                  )}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="flex-1 h-8 bg-green-600 hover:bg-green-700 text-white text-xs"
+                                  disabled={sending !== null || blocked}
+                                  onClick={() =>
+                                    sendManualToBot(post, "nowatermark")
+                                  }
+                                >
+                                  {sending === "nowatermark" ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Send className="mr-1 h-3 w-3" />
+                                      No Watermark
+                                    </>
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}

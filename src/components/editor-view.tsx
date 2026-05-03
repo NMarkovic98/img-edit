@@ -281,7 +281,7 @@ const localBrowserSave = new LocalBrowserSave();
 export { localBrowserSave };
 
 // Dimensions badge for images
-function DimensionsBadge({ src }: { src: string }) {
+export function DimensionsBadge({ src }: { src: string }) {
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
@@ -320,6 +320,12 @@ function DimensionsBadge({ src }: { src: string }) {
       {dims.w}×{dims.h} {label}
     </div>
   );
+}
+
+// Authors that must never receive bot replies (test/own accounts)
+const BLOCKED_BOT_AUTHORS = new Set(["nmarkovic98"]);
+export function isBlockedBotAuthor(author?: string | null): boolean {
+  return !!author && BLOCKED_BOT_AUTHORS.has(author.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +457,46 @@ async function createWatermarkedBlob(imageUrl: string): Promise<Blob> {
 // Exported for labs preview
 export { applyWatermarkToCanvas };
 
+// Watermark a File while preserving its original format — PNG stays lossless,
+// JPEG is re-encoded at quality 1.0. Used by the manual-upload flow where
+// preserving the source quality is critical.
+export async function applyWatermarkPreservingFormat(
+  file: File,
+): Promise<{ blob: Blob; filename: string }> {
+  const isPng =
+    file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
+  const url = URL.createObjectURL(file);
+  try {
+    return await new Promise((resolve, reject) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(img, 0, 0);
+        applyWatermarkToCanvas(ctx, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return reject(new Error("Canvas toBlob failed"));
+            const ext = isPng ? "png" : "jpg";
+            const baseName =
+              file.name.replace(/\.[^.]+$/, "") || "watermarked";
+            resolve({ blob, filename: `${baseName}-watermarked.${ext}` });
+          },
+          isPng ? "image/png" : "image/jpeg",
+          isPng ? undefined : 1.0,
+        );
+      };
+      img.onerror = () =>
+        reject(new Error("Failed to load image for watermark"));
+      img.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 interface RedditPost {
   id: string;
   title: string;
@@ -541,6 +587,7 @@ export function EditorView() {
   const [sendingBot, setSendingBot] = useState<
     null | "watermarked" | "nowatermark"
   >(null);
+  const [postUrlOverride, setPostUrlOverride] = useState<string | null>(null);
   const [restoreMode, setRestoreMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -639,6 +686,7 @@ export function EditorView() {
             return null;
           });
           watermarkedBlobRef.current = null;
+          setPostUrlOverride(null);
 
           setCurrentItem(pendingItem);
           setEditPrompt(pendingItem.analysis);
@@ -1060,6 +1108,7 @@ export function EditorView() {
                             <div className="absolute top-1.5 left-1.5 bg-blue-600/80 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
                               Ref {idx + 1}
                             </div>
+                            <DimensionsBadge src={imgUrl} />
                           </div>
                         ))}
                     </div>
@@ -1630,6 +1679,7 @@ export function EditorView() {
                         alt="Watermarked preview"
                         className="w-full h-full object-contain"
                       />
+                      <DimensionsBadge src={watermarkedUrl} />
                     </div>
                   )}
                   {watermarkedUrl && (
@@ -1738,6 +1788,39 @@ export function EditorView() {
                       </Button>
                     </>
                   )}
+                  {(() => {
+                    const origUrl = currentItem?.post?.postUrl || "";
+                    const currentUrl = postUrlOverride ?? origUrl;
+                    const edited = currentUrl !== origUrl;
+                    return (
+                      <div className="space-y-1 pt-1">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                            Reddit Post URL
+                          </label>
+                          {edited && (
+                            <button
+                              type="button"
+                              className="text-[10px] text-blue-500 hover:underline"
+                              onClick={() => setPostUrlOverride(null)}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={currentUrl}
+                          onChange={(e) => setPostUrlOverride(e.target.value)}
+                          disabled={sendingBot !== null}
+                          spellCheck={false}
+                          className={`w-full px-2 py-1.5 text-xs font-mono rounded-md border bg-background ${
+                            edited ? "border-amber-500/60" : "border-input"
+                          }`}
+                        />
+                      </div>
+                    );
+                  })()}
                   <Button
                     variant="default"
                     size="sm"
@@ -1746,6 +1829,25 @@ export function EditorView() {
                       !currentItem?.post?.postUrl || sendingBot !== null
                     }
                     onClick={async () => {
+                      if (isBlockedBotAuthor(currentItem?.post?.author)) {
+                        alert(
+                          `Sending blocked: u/${currentItem?.post?.author} is on the do-not-send list`,
+                        );
+                        return;
+                      }
+                      const targetUrl = (
+                        postUrlOverride ?? currentItem!.post.postUrl
+                      ).trim();
+                      if (!targetUrl) {
+                        alert("Reddit post URL is required");
+                        return;
+                      }
+                      if (targetUrl !== currentItem!.post.postUrl) {
+                        const ok = window.confirm(
+                          `You're about to send to a custom URL:\n\n${targetUrl}\n\nOriginal post URL was:\n${currentItem!.post.postUrl}\n\nProceed?`,
+                        );
+                        if (!ok) return;
+                      }
                       setSendingBot("watermarked");
                       try {
                         // Get watermarked blob — prefer stored ref, regenerate if missing
@@ -1767,7 +1869,7 @@ export function EditorView() {
                           blob,
                           `watermarked-${Date.now()}.jpg`,
                         );
-                        formData.append("redditUrl", currentItem!.post.postUrl);
+                        formData.append("redditUrl", targetUrl);
                         const paypal =
                           localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
@@ -1818,6 +1920,25 @@ export function EditorView() {
                       !currentItem?.post?.postUrl || sendingBot !== null
                     }
                     onClick={async () => {
+                      if (isBlockedBotAuthor(currentItem?.post?.author)) {
+                        alert(
+                          `Sending blocked: u/${currentItem?.post?.author} is on the do-not-send list`,
+                        );
+                        return;
+                      }
+                      const targetUrl = (
+                        postUrlOverride ?? currentItem!.post.postUrl
+                      ).trim();
+                      if (!targetUrl) {
+                        alert("Reddit post URL is required");
+                        return;
+                      }
+                      if (targetUrl !== currentItem!.post.postUrl) {
+                        const ok = window.confirm(
+                          `You're about to send to a custom URL:\n\n${targetUrl}\n\nOriginal post URL was:\n${currentItem!.post.postUrl}\n\nProceed?`,
+                        );
+                        if (!ok) return;
+                      }
                       setSendingBot("nowatermark");
                       try {
                         const imgUrl =
@@ -1836,7 +1957,7 @@ export function EditorView() {
                           blob,
                           `edited-${Date.now()}.jpg`,
                         );
-                        formData.append("redditUrl", currentItem!.post.postUrl);
+                        formData.append("redditUrl", targetUrl);
                         const paypal =
                           localStorage.getItem("paypal_link") || "";
                         if (paypal) formData.append("paypalLink", paypal);
@@ -1945,6 +2066,7 @@ export function EditorView() {
                         className="object-cover"
                         unoptimized
                       />
+                      <DimensionsBadge src={item.url} />
                     </div>
                     <div className="p-2 space-y-1">
                       <p className="text-xs font-medium truncate">
