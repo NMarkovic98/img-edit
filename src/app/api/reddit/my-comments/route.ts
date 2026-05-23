@@ -18,82 +18,214 @@ async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
-async function redditFetch(url: string) {
+const COMMON_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  Accept:
+    "application/atom+xml,application/xml,text/xml,application/json;q=0.9,*/*;q=0.5",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+};
+
+async function redditFetchText(url: string): Promise<string> {
   const res = await proxyFetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-    },
+    headers: COMMON_HEADERS,
     cache: "no-store",
   });
+  if (res.status === 429) throw new Error("RATE_LIMITED");
+  if (!res.ok) throw new Error(`Reddit error: ${res.status}`);
+  return res.text();
+}
 
-  if (res.status === 429) {
-    throw new Error("RATE_LIMITED");
-  }
-
-  if (!res.ok) {
-    throw new Error(`Reddit API error: ${res.status}`);
-  }
-
+async function redditFetchJson(url: string): Promise<any> {
+  const res = await proxyFetch(url, {
+    headers: COMMON_HEADERS,
+    cache: "no-store",
+  });
+  if (res.status === 429) throw new Error("RATE_LIMITED");
+  if (!res.ok) throw new Error(`Reddit error: ${res.status}`);
   return res.json();
 }
 
-interface ReplyInfo {
-  count: number;
-  topAuthor?: string;
-  topBody?: string;
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#032;|&#32;/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'");
 }
 
-// Walk a comment tree, find a comment by id, then count direct + nested replies that aren't from the user
-function countRepliesForComment(
-  comments: any[],
+// Reddit's atom <content> wraps the comment HTML and then appends a footer like
+// `submitted by /u/X to /r/Y [link] [comment]`. Trim that off and strip tags.
+function extractBody(rawContent: string): string {
+  let html = rawContent
+    .replace(/^<!\[CDATA\[/, "")
+    .replace(/\]\]>$/, "")
+    .replace(/<!--\s*SC_OFF\s*-->/gi, "")
+    .replace(/<!--\s*SC_ON\s*-->/gi, "");
+
+  const submittedIdx = html.search(/submitted\s+by/i);
+  if (submittedIdx > 0) html = html.slice(0, submittedIdx);
+
+  html = html.replace(/<\/p>/gi, "\n").replace(/<br\s*\/?>/gi, "\n");
+  html = html.replace(/<[^>]+>/g, "");
+  return decodeEntities(html).replace(/\n{3,}/g, "\n\n").trim();
+}
+
+interface MyComment {
+  id: string;
+  body: string;
+  score: number;
+  createdUtc: number;
+  subreddit: string;
+  postId: string;
+  postTitle: string;
+  postPermalink: string;
+  permalink: string;
+  replyCount: number;
+  topReplyAuthor?: string;
+  topReplyBody?: string;
+}
+
+function parseAtomFeed(xml: string): MyComment[] {
+  const out: MyComment[] = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let m: RegExpExecArray | null;
+  while ((m = entryRe.exec(xml)) !== null) {
+    const block = m[1];
+
+    const idMatch = /<id>([\s\S]*?)<\/id>/.exec(block);
+    const linkMatch = /<link[^>]*href="([^"]+)"/i.exec(block);
+    const subMatch = /<category[^>]*term="([^"]+)"/i.exec(block);
+    const publishedMatch = /<published>([^<]+)<\/published>/.exec(block);
+    const updatedMatch = /<updated>([^<]+)<\/updated>/.exec(block);
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/.exec(block);
+    const contentMatch = /<content[^>]*>([\s\S]*?)<\/content>/.exec(block);
+
+    if (!idMatch || !linkMatch) continue;
+
+    const rawId = idMatch[1].trim();
+    const commentId = rawId.replace(/^t1_/, "");
+    if (!commentId) continue;
+
+    const permalink = linkMatch[1];
+    const subreddit = subMatch?.[1] || "";
+    const publishedRaw = publishedMatch?.[1] || updatedMatch?.[1] || "";
+    const createdUtc = publishedRaw
+      ? Math.floor(new Date(publishedRaw).getTime() / 1000)
+      : 0;
+
+    let postTitle = "";
+    if (titleMatch) {
+      const t = decodeEntities(titleMatch[1].trim());
+      // Title format is typically "{author} comments on {Post Title}"
+      const tm = /comments?\s+on\s+([\s\S]+)$/i.exec(t);
+      postTitle = tm ? tm[1].trim() : t;
+    }
+
+    let postId = "";
+    const pm = /\/comments\/([A-Za-z0-9]+)\//.exec(permalink);
+    if (pm) postId = pm[1];
+
+    const postPermalink = postId
+      ? `https://www.reddit.com/comments/${postId}`
+      : permalink;
+
+    const body = contentMatch ? extractBody(contentMatch[1]) : "";
+
+    out.push({
+      id: commentId,
+      body,
+      score: 0, // Atom feed doesn't include score — enrichment will fill this in
+      createdUtc,
+      subreddit,
+      postId,
+      postTitle,
+      postPermalink,
+      permalink,
+      replyCount: 0,
+    });
+  }
+  return out;
+}
+
+interface EnrichInfo {
+  score: number;
+  replyCount: number;
+  topReplyAuthor?: string;
+  topReplyBody?: string;
+}
+
+// Find the user's comment in the post tree, return its score + count direct/nested
+// replies that aren't from the user.
+function enrichFromTree(
+  nodes: any[],
   targetCommentId: string,
   username: string,
-): ReplyInfo {
-  const result: ReplyInfo = { count: 0 };
+): EnrichInfo | null {
+  let found: EnrichInfo | null = null;
 
-  function walkChildren(nodes: any[]) {
-    for (const node of nodes) {
-      if (node.kind !== "t1") continue;
-      const c = node.data;
-      if (c.author?.toLowerCase() !== username.toLowerCase()) {
-        result.count += 1;
-        if (!result.topAuthor) {
-          result.topAuthor = c.author;
-          result.topBody = (c.body || "").slice(0, 160);
+  function countReplies(children: any[]): {
+    count: number;
+    topAuthor?: string;
+    topBody?: string;
+  } {
+    let count = 0;
+    let topAuthor: string | undefined;
+    let topBody: string | undefined;
+    function walk(ns: any[]) {
+      for (const n of ns) {
+        if (n.kind !== "t1") continue;
+        const c = n.data;
+        if (c.author?.toLowerCase() !== username.toLowerCase()) {
+          count += 1;
+          if (!topAuthor) {
+            topAuthor = c.author;
+            topBody = (c.body || "").slice(0, 160);
+          }
         }
-      }
-      if (c.replies && c.replies.data?.children) {
-        walkChildren(c.replies.data.children);
+        if (c.replies && c.replies.data?.children) {
+          walk(c.replies.data.children);
+        }
       }
     }
+    walk(children);
+    return { count, topAuthor, topBody };
   }
 
-  function findAndCount(nodes: any[]): boolean {
-    for (const node of nodes) {
-      if (node.kind !== "t1") continue;
-      const c = node.data;
+  function walk(ns: any[]): boolean {
+    for (const n of ns) {
+      if (n.kind !== "t1") continue;
+      const c = n.data;
       if (c.id === targetCommentId) {
-        if (c.replies && c.replies.data?.children) {
-          walkChildren(c.replies.data.children);
-        }
+        const info = c.replies?.data?.children
+          ? countReplies(c.replies.data.children)
+          : { count: 0 };
+        found = {
+          score: typeof c.score === "number" ? c.score : 0,
+          replyCount: info.count,
+          topReplyAuthor: info.topAuthor,
+          topReplyBody: info.topBody,
+        };
         return true;
       }
-      if (c.replies && c.replies.data?.children) {
-        if (findAndCount(c.replies.data.children)) return true;
+      if (c.replies?.data?.children) {
+        if (walk(c.replies.data.children)) return true;
       }
     }
     return false;
   }
 
-  findAndCount(comments);
-  return result;
+  walk(nodes);
+  return found;
 }
 
 export async function GET(req: NextRequest) {
@@ -115,41 +247,18 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const userComments = await redditFetch(
-      `https://www.reddit.com/user/${username}/comments.json?limit=50&raw_json=1`,
+    // Primary listing: Atom feed (Reddit blocks the JSON endpoint for many cloud IPs)
+    const xml = await redditFetchText(
+      `https://www.reddit.com/user/${username}/comments.rss?sort=new&limit=50`,
     );
+    const comments = parseAtomFeed(xml);
 
-    const rawComments = userComments.data?.children || [];
-
-    const comments = rawComments
-      .filter((c: any) => c.kind === "t1")
-      .map((c: any) => {
-        const d = c.data;
-        const postId = (d.link_id || "").replace("t3_", "");
-        return {
-          id: d.id as string,
-          body: (d.body || "") as string,
-          score: typeof d.score === "number" ? d.score : 0,
-          createdUtc: typeof d.created_utc === "number" ? d.created_utc : 0,
-          subreddit: (d.subreddit || "") as string,
-          postId,
-          postTitle: (d.link_title || "") as string,
-          postPermalink: d.link_permalink
-            ? (d.link_permalink as string)
-            : `https://www.reddit.com/comments/${postId}`,
-          permalink: d.permalink
-            ? `https://www.reddit.com${d.permalink}`
-            : `https://www.reddit.com/comments/${postId}/_/${d.id}/`,
-          replyCount: 0,
-          topReplyAuthor: undefined as string | undefined,
-          topReplyBody: undefined as string | undefined,
-        };
-      });
+    let enrichedAny = false;
+    let enrichmentFailed = false;
 
     if (enrich && comments.length > 0) {
-      // Pick the most-recent unique posts to enrich (avoid hammering Reddit)
       const seen = new Set<string>();
-      const enrichTargets: typeof comments = [];
+      const enrichTargets: MyComment[] = [];
       for (const c of comments) {
         if (!c.postId || seen.has(c.postId)) continue;
         seen.add(c.postId);
@@ -157,9 +266,8 @@ export async function GET(req: NextRequest) {
         if (enrichTargets.length >= enrichLimit) break;
       }
 
-      // Map postId -> array of (commentId, index in `comments`)
       const byPost: Record<string, { commentId: string; idx: number }[]> = {};
-      comments.forEach((c: any, idx: number) => {
+      comments.forEach((c, idx) => {
         if (!c.postId) return;
         if (!byPost[c.postId]) byPost[c.postId] = [];
         byPost[c.postId].push({ commentId: c.id, idx });
@@ -167,26 +275,27 @@ export async function GET(req: NextRequest) {
 
       for (const target of enrichTargets) {
         try {
-          const postComments = await redditFetch(
+          const postData = await redditFetchJson(
             `https://www.reddit.com/comments/${target.postId}.json?raw_json=1&limit=200`,
           );
-          if (Array.isArray(postComments) && postComments.length > 1) {
-            const tree = postComments[1].data?.children || [];
+          if (Array.isArray(postData) && postData.length > 1) {
+            const tree = postData[1].data?.children || [];
             for (const entry of byPost[target.postId] || []) {
-              const info = countRepliesForComment(
-                tree,
-                entry.commentId,
-                username,
-              );
-              comments[entry.idx].replyCount = info.count;
-              comments[entry.idx].topReplyAuthor = info.topAuthor;
-              comments[entry.idx].topReplyBody = info.topBody;
+              const info = enrichFromTree(tree, entry.commentId, username);
+              if (info) {
+                comments[entry.idx].score = info.score;
+                comments[entry.idx].replyCount = info.replyCount;
+                comments[entry.idx].topReplyAuthor = info.topReplyAuthor;
+                comments[entry.idx].topReplyBody = info.topReplyBody;
+                enrichedAny = true;
+              }
             }
           }
           await new Promise((r) => setTimeout(r, 400));
         } catch (err) {
+          enrichmentFailed = true;
           console.error(
-            `[my-comments] Failed to enrich post ${target.postId}:`,
+            `[my-comments] enrichment failed for ${target.postId}:`,
             err,
           );
         }
@@ -199,7 +308,9 @@ export async function GET(req: NextRequest) {
         username,
         count: comments.length,
         comments,
-        enriched: enrich,
+        enriched: enrichedAny,
+        enrichmentFailed,
+        source: "rss",
         timestamp: new Date().toISOString(),
       }),
       { headers: { "Content-Type": "application/json" } },
