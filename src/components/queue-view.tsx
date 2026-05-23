@@ -89,6 +89,7 @@ const AVAILABLE_SUBREDDITS = [
   { id: "picrequests", label: "r/picrequests" },
   { id: "estoration", label: "r/estoration" },
   { id: "editmyphoto", label: "r/editmyphoto" },
+  { id: "BeAmazed", label: "r/BeAmazed" },
 ];
 
 // Fallback colors per subreddit if icon can't be loaded

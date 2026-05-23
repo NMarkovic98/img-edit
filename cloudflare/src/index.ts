@@ -25,6 +25,7 @@ const SUBREDDITS = [
   "PhotoshopRequests",
   "restoration",
   "editmyphoto",
+  "BeAmazed",
 ];
 
 export default {
