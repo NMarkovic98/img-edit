@@ -14,7 +14,11 @@ export interface Env {
 // KV keys
 const KEY_ENABLED = "monitor:enabled";
 const KEY_SEEN_IDS = "monitor:seenIds";
+const KEY_SEEN_REPLY_IDS = "monitor:seenReplyIds";
 const KEY_PUSH_SUBS = "monitor:pushSubscriptions";
+const KEY_USERNAME = "monitor:username";
+
+const DEFAULT_USERNAME = "deandean91";
 
 const SUBREDDITS = [
   "PhotoshopRequest",
@@ -24,15 +28,19 @@ const SUBREDDITS = [
 ];
 
 export default {
-  // Cron trigger — runs every minute, checks twice (at 0s and 30s) for ~30s polling
+  // Cron trigger — runs every minute. New-post check runs twice (0s + 30s).
+  // Reply check runs once per minute (heavier — fetches several post threads).
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     const enabled = await env.KV.get(KEY_ENABLED);
     if (enabled !== "true") return;
 
-    // First check immediately
+    // First post check immediately
     await checkReddit(env);
 
-    // Second check after 30 seconds
+    // Reply check (independent of post check; fire-and-forget)
+    ctx.waitUntil(checkReplies(env));
+
+    // Second post check after 30 seconds
     ctx.waitUntil(
       new Promise<void>((resolve) =>
         setTimeout(async () => {
@@ -60,7 +68,55 @@ export default {
     if (url.pathname === "/status" && request.method === "GET") {
       const enabled = (await env.KV.get(KEY_ENABLED)) === "true";
       const subs = await getPushSubscriptions(env);
-      return json({ enabled, subscriptionCount: subs.length }, corsHeaders);
+      const username = (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
+      return json(
+        { enabled, subscriptionCount: subs.length, username },
+        corsHeaders,
+      );
+    }
+
+    // GET /username — read monitored username
+    if (url.pathname === "/username" && request.method === "GET") {
+      const username = (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
+      return json({ ok: true, username }, corsHeaders);
+    }
+
+    // POST /username — set monitored username
+    if (url.pathname === "/username" && request.method === "POST") {
+      const body = (await request.json()) as any;
+      const next = (body.username || "").toString().trim().replace(/^u\//, "");
+      if (!next) {
+        return json({ ok: false, error: "username required" }, corsHeaders, 400);
+      }
+      const prev = await env.KV.get(KEY_USERNAME);
+      await env.KV.put(KEY_USERNAME, next);
+      // If username changed, clear seen-reply cache so we re-baseline
+      if (prev !== next) {
+        await env.KV.delete(KEY_SEEN_REPLY_IDS);
+      }
+      return json({ ok: true, username: next }, corsHeaders);
+    }
+
+    // POST /test-reply-push — send a test reply-style push to debug ringing
+    if (url.pathname === "/test-reply-push" && request.method === "POST") {
+      const subs = await getPushSubscriptions(env);
+      if (subs.length === 0) {
+        return json({ ok: false, error: "No subscriptions" }, corsHeaders, 400);
+      }
+      try {
+        await sendPushToAll(subs, env, {
+          title: "💬 Test reply",
+          body: "If you see this and feel three vibrations, replies work.",
+          tag: `fixtral-reply-test-${Date.now()}`,
+          url: "/app",
+          type: "reply",
+          vibrate: [400, 200, 400, 200, 400],
+          requireInteraction: true,
+        });
+        return json({ ok: true, sentTo: subs.length }, corsHeaders);
+      } catch (err: any) {
+        return json({ ok: false, error: err.message }, corsHeaders, 500);
+      }
     }
 
     // POST /toggle — enable/disable monitoring
@@ -181,20 +237,23 @@ async function saveSeenIds(env: Env, ids: Set<string>) {
   await env.KV.put(KEY_SEEN_IDS, JSON.stringify(arr));
 }
 
+// Route through reddit-proxy via service binding — Reddit 403s direct CF Worker egress IPs,
+// and public Worker→Worker fetch on same account returns 1042.
+async function redditProxyFetch(env: Env, redditUrl: string): Promise<Response> {
+  const proxyHeaders: Record<string, string> = {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  };
+  if (env.PROXY_SECRET) proxyHeaders["X-Proxy-Secret"] = env.PROXY_SECRET;
+  const proxyRequestUrl = `https://reddit-proxy/?url=${encodeURIComponent(redditUrl)}`;
+  return env.REDDIT_PROXY.fetch(proxyRequestUrl, { headers: proxyHeaders });
+}
+
 async function checkReddit(env: Env) {
   try {
     const multiSub = SUBREDDITS.join("+");
     const redditUrl = `https://www.reddit.com/r/${multiSub}/new.json?limit=50&raw_json=1`;
-
-    // Route through reddit-proxy via service binding — Reddit 403s direct CF Worker egress IPs,
-    // and public Worker→Worker fetch on same account returns 1042.
-    const proxyHeaders: Record<string, string> = {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-    };
-    if (env.PROXY_SECRET) proxyHeaders["X-Proxy-Secret"] = env.PROXY_SECRET;
-    const proxyRequestUrl = `https://reddit-proxy/?url=${encodeURIComponent(redditUrl)}`;
-    const res = await env.REDDIT_PROXY.fetch(proxyRequestUrl, { headers: proxyHeaders });
+    const res = await redditProxyFetch(env, redditUrl);
 
     if (!res.ok) {
       const body = await res.text();
@@ -263,6 +322,232 @@ async function checkReddit(env: Env) {
   } catch (err) {
     console.error("checkReddit error:", err);
   }
+}
+
+// ─── Reply monitoring ────────────────────────────────────────────────
+// Polls Reddit for u/{username}'s recent comments, then walks each commented
+// post's tree to find new replies. Sends a 3-pulse push for each new reply.
+
+const ALLOWED_SUBS_LOWER = new Set(SUBREDDITS.map((s) => s.toLowerCase()));
+const REPLY_LOOKBACK_SECONDS = 48 * 60 * 60; // only care about posts user commented on in last 48h
+const REPLY_MAX_POSTS = 5; // cap on post threads we fetch per cron
+const REPLY_REQUEST_GAP_MS = 600;
+
+async function getSeenReplyIds(env: Env): Promise<Set<string>> {
+  try {
+    const raw = await env.KV.get(KEY_SEEN_REPLY_IDS);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {}
+  return new Set();
+}
+
+async function saveSeenReplyIds(env: Env, ids: Set<string>) {
+  // Keep last 1000 IDs
+  const arr = [...ids].slice(-1000);
+  await env.KV.put(KEY_SEEN_REPLY_IDS, JSON.stringify(arr));
+}
+
+interface FoundReply {
+  replyId: string;
+  replyAuthor: string;
+  replyBody: string;
+  parentCommentId: string;
+  postId: string;
+  postTitle: string;
+  subreddit: string;
+  permalink: string;
+  createdUtc: number;
+}
+
+async function checkReplies(env: Env) {
+  try {
+    const username =
+      (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
+
+    const userUrl = `https://www.reddit.com/user/${username}/comments.json?limit=50&raw_json=1`;
+    const userRes = await redditProxyFetch(env, userUrl);
+    if (!userRes.ok) {
+      console.error(
+        `checkReplies: user comments fetch failed ${userRes.status}`,
+      );
+      return;
+    }
+    const userData: any = await userRes.json();
+    const userComments: any[] = (userData.data?.children || [])
+      .filter((c: any) => c.kind === "t1")
+      .map((c: any) => c.data);
+
+    const cutoff = Date.now() / 1000 - REPLY_LOOKBACK_SECONDS;
+
+    // Group by post; only keep posts in monitored subs + recent enough
+    interface PostInfo {
+      commentIds: Set<string>;
+      subreddit: string;
+      postTitle: string;
+      latestUtc: number;
+    }
+    const byPost = new Map<string, PostInfo>();
+    for (const c of userComments) {
+      const postId = String(c.link_id || "").replace("t3_", "");
+      if (!postId) continue;
+      const sub = String(c.subreddit || "").toLowerCase();
+      if (!ALLOWED_SUBS_LOWER.has(sub)) continue;
+      if (typeof c.created_utc !== "number" || c.created_utc < cutoff) continue;
+
+      let entry = byPost.get(postId);
+      if (!entry) {
+        entry = {
+          commentIds: new Set<string>(),
+          subreddit: c.subreddit,
+          postTitle: c.link_title || "",
+          latestUtc: c.created_utc,
+        };
+        byPost.set(postId, entry);
+      }
+      entry.commentIds.add(c.id);
+      if (c.created_utc > entry.latestUtc) entry.latestUtc = c.created_utc;
+    }
+
+    if (byPost.size === 0) return;
+
+    // Most-recently-commented posts first, capped
+    const sortedPosts = [...byPost.entries()]
+      .sort(([, a], [, b]) => b.latestUtc - a.latestUtc)
+      .slice(0, REPLY_MAX_POSTS);
+
+    const seenIds = await getSeenReplyIds(env);
+    const isFirstRun = seenIds.size === 0;
+
+    const allReplies: FoundReply[] = [];
+
+    for (let i = 0; i < sortedPosts.length; i++) {
+      const [postId, info] = sortedPosts[i];
+      try {
+        const postUrl = `https://www.reddit.com/comments/${postId}.json?raw_json=1&limit=200`;
+        const res = await redditProxyFetch(env, postUrl);
+        if (!res.ok) {
+          console.error(
+            `checkReplies: post ${postId} fetch failed ${res.status}`,
+          );
+          continue;
+        }
+        const data: any = await res.json();
+        if (!Array.isArray(data) || data.length < 2) continue;
+        const tree: any[] = data[1].data?.children || [];
+
+        const collected = findRepliesInTree(tree, info, postId, username);
+        allReplies.push(...collected);
+      } catch (err) {
+        console.error(`checkReplies: post ${postId} error:`, err);
+      }
+
+      // Small gap between requests to be polite
+      if (i < sortedPosts.length - 1) {
+        await new Promise((r) => setTimeout(r, REPLY_REQUEST_GAP_MS));
+      }
+    }
+
+    const freshReplies = allReplies.filter((r) => !seenIds.has(r.replyId));
+
+    // Persist all observed reply IDs (even non-fresh) so the set drifts forward
+    if (allReplies.length > 0 && (freshReplies.length > 0 || isFirstRun)) {
+      for (const r of allReplies) seenIds.add(r.replyId);
+      await saveSeenReplyIds(env, seenIds);
+    }
+
+    if (isFirstRun) {
+      console.log(
+        `checkReplies first run: baselined ${allReplies.length} replies for u/${username}`,
+      );
+      return;
+    }
+
+    if (freshReplies.length === 0) return;
+
+    const subs = await getPushSubscriptions(env);
+    if (subs.length === 0) {
+      console.log(
+        `checkReplies: ${freshReplies.length} new replies but no subscribers`,
+      );
+      return;
+    }
+
+    // Sort oldest first so notifications arrive in chronological order
+    freshReplies.sort((a, b) => a.createdUtc - b.createdUtc);
+
+    for (const reply of freshReplies) {
+      const bodyPreview =
+        (reply.replyBody || "").trim() ||
+        reply.postTitle ||
+        "New reply to your comment";
+      await sendPushToAll(subs, env, {
+        title: `💬 u/${reply.replyAuthor} replied in r/${reply.subreddit}`,
+        body: bodyPreview.slice(0, 180),
+        tag: `fixtral-reply-${reply.replyId}`,
+        url: reply.permalink,
+        type: "reply",
+        vibrate: [400, 200, 400, 200, 400],
+        requireInteraction: true,
+        postId: reply.postId,
+        replyId: reply.replyId,
+      });
+    }
+
+    console.log(
+      `checkReplies: notified ${freshReplies.length} new replies for u/${username}`,
+    );
+  } catch (err) {
+    console.error("checkReplies error:", err);
+  }
+}
+
+function findRepliesInTree(
+  tree: any[],
+  info: { commentIds: Set<string>; subreddit: string; postTitle: string },
+  postId: string,
+  username: string,
+): FoundReply[] {
+  const found: FoundReply[] = [];
+  const userLower = username.toLowerCase();
+
+  function walk(nodes: any[]) {
+    for (const node of nodes) {
+      if (node.kind !== "t1") continue;
+      const c = node.data;
+      const parentId: string = c.parent_id || "";
+      // Only count if parent is one of our user's tracked comments
+      if (parentId.startsWith("t1_")) {
+        const parentCommentId = parentId.slice(3);
+        if (
+          info.commentIds.has(parentCommentId) &&
+          c.author &&
+          String(c.author).toLowerCase() !== userLower &&
+          c.id
+        ) {
+          found.push({
+            replyId: c.id,
+            replyAuthor: c.author,
+            replyBody: String(c.body || ""),
+            parentCommentId,
+            postId,
+            postTitle: info.postTitle,
+            subreddit: info.subreddit,
+            permalink: c.permalink
+              ? `https://www.reddit.com${c.permalink}`
+              : `https://www.reddit.com/comments/${postId}/_/${c.id}/`,
+            createdUtc:
+              typeof c.created_utc === "number" ? c.created_utc : 0,
+          });
+        }
+      }
+      if (c.replies && c.replies.data?.children) {
+        walk(c.replies.data.children);
+      }
+    }
+  }
+
+  walk(tree);
+  return found;
 }
 
 // ─── Web Push (RFC 8291) implementation for Cloudflare Workers ───────

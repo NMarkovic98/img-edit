@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/monitor — toggle monitoring or sync push subscription
+// POST /api/monitor — toggle monitoring, sync push subscription, or set username
 export async function POST(request: NextRequest) {
   if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
@@ -39,6 +39,14 @@ export async function POST(request: NextRequest) {
     if ("enabled" in body) {
       const data = await workerFetch("/toggle", "POST", {
         enabled: body.enabled,
+      });
+      return NextResponse.json({ ok: true, ...data });
+    }
+
+    // Update the monitored Reddit username (whose comments we watch for replies)
+    if ("username" in body) {
+      const data = await workerFetch("/username", "POST", {
+        username: body.username,
       });
       return NextResponse.json({ ok: true, ...data });
     }

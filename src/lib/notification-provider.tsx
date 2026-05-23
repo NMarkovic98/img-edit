@@ -253,6 +253,17 @@ export function NotificationProvider({
       if (data.ok) {
         setIsMonitoring(data.enabled);
         isMonitoringRef.current = data.enabled;
+        // When turning monitoring on, sync the username we want to track for replies
+        if (data.enabled) {
+          const uname = getRedditUsername();
+          if (uname) {
+            authedFetch("/api/monitor", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ username: uname }),
+            }).catch(() => {});
+          }
+        }
       }
     } catch (err) {
       console.error("Toggle monitoring error:", err);
@@ -320,6 +331,16 @@ export function NotificationProvider({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscription: sub.toJSON() }),
       }).catch(() => {}); // non-critical
+
+      // Sync the Reddit username so the worker knows whose replies to watch
+      const uname = getRedditUsername();
+      if (uname) {
+        authedFetch("/api/monitor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: uname }),
+        }).catch(() => {});
+      }
 
       setIsSubscribed(true);
       console.log("Push subscription active");

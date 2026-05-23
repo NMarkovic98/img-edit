@@ -22,17 +22,28 @@ self.addEventListener("push", (event) => {
     };
   }
 
+  const isReply = data.type === "reply";
+  const vibrate =
+    Array.isArray(data.vibrate) && data.vibrate.length
+      ? data.vibrate
+      : isReply
+        ? [400, 200, 400, 200, 400]
+        : [100, 50, 100];
+
   const options = {
     body: data.body || "New activity on Fixtral",
     icon: data.icon || "/favicon.ico",
     badge: "/favicon.ico",
-    vibrate: [100, 50, 100],
+    vibrate,
+    requireInteraction: !!data.requireInteraction,
     data: {
       url: data.url || "/app",
       postId: data.postId,
+      replyId: data.replyId,
+      type: data.type,
     },
     actions: data.actions || [
-      { action: "open", title: "Open Fixtral" },
+      { action: "open", title: "Open" },
       { action: "dismiss", title: "Dismiss" },
     ],
     tag: data.tag || "fixtral-notification",
@@ -49,30 +60,45 @@ self.addEventListener("notificationclick", (event) => {
 
   if (event.action === "dismiss") return;
 
-  const postId = event.notification.data?.postId;
-  const baseUrl = event.notification.data?.url || "/app";
-  const targetUrl = postId ? `${baseUrl}?post=${postId}` : baseUrl;
+  const d = event.notification.data || {};
+  const rawUrl = d.url || "/app";
+  const isAbsolute = /^https?:\/\//i.test(rawUrl);
+  const isReply = d.type === "reply";
 
+  // For reply notifications with an absolute (Reddit) URL, open that URL directly.
+  // For everything else, focus an existing /app tab and deep-link to the post.
   event.waitUntil(
-    clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clientList) => {
-        // Focus existing window and navigate it
+    (async () => {
+      const clientList = await clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      if (isReply && isAbsolute) {
+        // Try to reuse an existing tab pointed at the same Reddit URL; otherwise open new
         for (const client of clientList) {
-          if (client.url.includes("/app") && "focus" in client) {
-            client.focus();
-            // Post message to scroll to the specific post
-            if (postId) {
-              client.postMessage({
-                type: "NAVIGATE_TO_POST",
-                postId: postId,
-              });
-            }
-            return client;
+          if (client.url === rawUrl && "focus" in client) {
+            return client.focus();
           }
         }
-        // Otherwise open new window with query param
-        return clients.openWindow(targetUrl);
-      }),
+        return clients.openWindow(rawUrl);
+      }
+
+      // Default: focus app tab, deep-link via postId
+      for (const client of clientList) {
+        if (client.url.includes("/app") && "focus" in client) {
+          client.focus();
+          if (d.postId) {
+            client.postMessage({
+              type: "NAVIGATE_TO_POST",
+              postId: d.postId,
+            });
+          }
+          return;
+        }
+      }
+      const target = d.postId ? `/app?post=${d.postId}` : rawUrl;
+      return clients.openWindow(target);
+    })(),
   );
 });
