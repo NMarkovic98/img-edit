@@ -19,10 +19,15 @@ const SUBREDDITS = [
 ];
 const FETCH_INTERVAL = 10000; // 10 seconds
 const REPLY_CHECK_INTERVAL = 60000; // 60 seconds
+const REDDIT_USERNAME = "deandean91";
 
 function getRedditUsername(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("reddit_username") || "";
+  if (typeof window === "undefined") return REDDIT_USERNAME;
+  const stored = localStorage.getItem("reddit_username");
+  if (stored !== REDDIT_USERNAME) {
+    localStorage.setItem("reddit_username", REDDIT_USERNAME);
+  }
+  return REDDIT_USERNAME;
 }
 
 // ─── Push Notification Context ──────────────────────────────────────
@@ -501,8 +506,6 @@ export function NotificationProvider({
   const checkReplies = useCallback(async () => {
     try {
       const username = getRedditUsername();
-      if (!username) return;
-
       const res = await authedFetch(`/api/reddit/replies?username=${username}`);
       const data = await res.json();
       if (!data.ok) return;

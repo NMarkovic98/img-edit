@@ -6,7 +6,7 @@ import { Wand2, ArrowRight, Lock, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 export default function LandingPage() {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState("deandean91");
   const [password, setPassword] = useState("");
   const [paypalLink, setPaypalLink] = useState("");
   const [botUrl, setBotUrl] = useState("");
@@ -15,6 +15,7 @@ export default function LandingPage() {
   const router = useRouter();
 
   useEffect(() => {
+    localStorage.setItem("reddit_username", "deandean91");
     const saved = localStorage.getItem("reddit_username");
     const token = localStorage.getItem("app_token");
     if (saved && token) {
@@ -33,7 +34,7 @@ export default function LandingPage() {
     e.preventDefault();
     setError("");
 
-    const trimmed = username.trim().replace(/^u\//, "");
+    const trimmed = "deandean91";
     if (!trimmed) return;
     if (!password.trim()) {
       setError("Password is required");

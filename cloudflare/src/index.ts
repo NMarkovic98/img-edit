@@ -360,23 +360,196 @@ interface FoundReply {
   createdUtc: number;
 }
 
+interface UserCommentRef {
+  id: string;
+  postId: string;
+  subreddit: string;
+  postTitle: string;
+  createdUtc: number;
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#032;|&#32;/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
+function getTag(block: string, tag: string): string {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
+  return decodeEntities(re.exec(block)?.[1]?.trim() || "");
+}
+
+function getLinks(block: string): string[] {
+  return [...block.matchAll(/<link[^>]*href="([^"]+)"/gi)].map((m) =>
+    decodeEntities(m[1]),
+  );
+}
+
+function extractRssBody(rawContent: string): string {
+  let html = decodeEntities(rawContent)
+    .replace(/^<!\[CDATA\[/, "")
+    .replace(/\]\]>$/, "")
+    .replace(/<!--\s*SC_OFF\s*-->/gi, "")
+    .replace(/<!--\s*SC_ON\s*-->/gi, "");
+
+  const submittedIdx = html.search(/submitted\s+by/i);
+  if (submittedIdx > 0) html = html.slice(0, submittedIdx);
+
+  html = html.replace(/<\/p>/gi, "\n").replace(/<br\s*\/?>/gi, "\n");
+  html = html.replace(/<[^>]+>/g, "");
+  return decodeEntities(html).replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function getRssCommentId(block: string): string {
+  return getTag(block, "id").replace(/^t1_/, "");
+}
+
+function getRssAuthor(block: string): string {
+  const authorBlock = /<author[^>]*>([\s\S]*?)<\/author>/i.exec(block)?.[1] || "";
+  return getTag(authorBlock, "name").replace(/^\/?u\//i, "");
+}
+
+function getRssCreatedUtc(block: string): number {
+  const raw = getTag(block, "published") || getTag(block, "updated");
+  return raw ? Math.floor(new Date(raw).getTime() / 1000) : 0;
+}
+
+function extractRssPostId(url: string): string {
+  return /\/comments\/([A-Za-z0-9]+)\//.exec(url)?.[1] || "";
+}
+
+function extractRssSubreddit(block: string, links: string[]): string {
+  const category = /<category[^>]*term="([^"]+)"/i.exec(block)?.[1];
+  if (category) return decodeEntities(category);
+  const link = links.find((l) => /\/r\/[^/]+\/comments\//i.test(l));
+  return /\/r\/([^/]+)\//i.exec(link || "")?.[1] || "";
+}
+
+function extractRssPostTitle(block: string): string {
+  const title = getTag(block, "title");
+  const prefixed = /^\/?u\/[^ ]+\s+(?:comments?\s+)?on\s+([\s\S]+)$/i.exec(title);
+  if (prefixed) return prefixed[1].trim();
+  const plain = /comments?\s+on\s+([\s\S]+)$/i.exec(title);
+  return plain ? plain[1].trim() : title;
+}
+
+function parseUserCommentRefs(xml: string): UserCommentRef[] {
+  const refs: UserCommentRef[] = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = entryRe.exec(xml)) !== null) {
+    const block = m[1];
+    const id = getRssCommentId(block);
+    const links = getLinks(block);
+    const permalink = links.find((l) => /\/comments\//.test(l)) || "";
+    const postId = extractRssPostId(permalink);
+    if (!id || !postId) continue;
+
+    refs.push({
+      id,
+      postId,
+      subreddit: extractRssSubreddit(block, links),
+      postTitle: extractRssPostTitle(block),
+      createdUtc: getRssCreatedUtc(block),
+    });
+  }
+
+  return refs;
+}
+
+function findParentCommentId(
+  links: string[],
+  ownId: string,
+  candidates: Set<string>,
+): string {
+  for (const link of links) {
+    const parts = link.split("?")[0].split("#")[0].split("/").filter(Boolean);
+    const ownIdx = parts.indexOf(ownId);
+    if (ownIdx <= 0) continue;
+    for (let i = ownIdx - 1; i >= 0; i--) {
+      if (candidates.has(parts[i])) return parts[i];
+    }
+  }
+  return "";
+}
+
+function parseRepliesFromPostFeed(
+  xml: string,
+  postId: string,
+  trackedComments: Map<string, UserCommentRef>,
+  username: string,
+): FoundReply[] {
+  const found: FoundReply[] = [];
+  const trackedIds = new Set(trackedComments.keys());
+  const userLower = username.toLowerCase();
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = entryRe.exec(xml)) !== null) {
+    const block = m[1];
+    const replyId = getRssCommentId(block);
+    if (!replyId || trackedIds.has(replyId)) continue;
+
+    const replyAuthor = getRssAuthor(block);
+    if (!replyAuthor || replyAuthor.toLowerCase() === userLower) continue;
+
+    const links = getLinks(block);
+    const parentCommentId = findParentCommentId(links, replyId, trackedIds);
+    const parent = trackedComments.get(parentCommentId);
+    if (!parent) continue;
+
+    found.push({
+      replyId,
+      replyAuthor,
+      replyBody: extractRssBody(getTag(block, "content")),
+      parentCommentId,
+      postId,
+      postTitle: parent.postTitle,
+      subreddit: parent.subreddit,
+      permalink:
+        links.find((l) => /\/comments\//.test(l)) ||
+        `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
+      createdUtc: getRssCreatedUtc(block),
+    });
+  }
+
+  return found;
+}
+
+async function redditProxyFetchFirstText(
+  env: Env,
+  urls: string[],
+): Promise<string | null> {
+  for (const url of urls) {
+    const res = await redditProxyFetch(env, url);
+    if (res.ok) return res.text();
+    console.error(`reddit rss fetch failed ${res.status}: ${url}`);
+    if (res.status === 429) return null;
+  }
+  return null;
+}
+
 async function checkReplies(env: Env) {
   try {
     const username =
       (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
 
-    const userUrl = `https://www.reddit.com/user/${username}/comments.json?limit=50&raw_json=1`;
-    const userRes = await redditProxyFetch(env, userUrl);
-    if (!userRes.ok) {
-      console.error(
-        `checkReplies: user comments fetch failed ${userRes.status}`,
-      );
-      return;
-    }
-    const userData: any = await userRes.json();
-    const userComments: any[] = (userData.data?.children || [])
-      .filter((c: any) => c.kind === "t1")
-      .map((c: any) => c.data);
+    const userXml = await redditProxyFetchFirstText(env, [
+      `https://www.reddit.com/user/${username}/comments/.rss?sort=new&limit=50`,
+      `https://www.reddit.com/user/${username}/comments.rss?sort=new&limit=50`,
+      `https://old.reddit.com/user/${username}/comments/.rss?sort=new&limit=50`,
+      `https://old.reddit.com/user/${username}/comments.rss?sort=new&limit=50`,
+    ]);
+    if (!userXml) return;
+    const userComments = parseUserCommentRefs(userXml);
 
     const cutoff = Date.now() / 1000 - REPLY_LOOKBACK_SECONDS;
 
@@ -389,24 +562,24 @@ async function checkReplies(env: Env) {
     }
     const byPost = new Map<string, PostInfo>();
     for (const c of userComments) {
-      const postId = String(c.link_id || "").replace("t3_", "");
+      const postId = c.postId;
       if (!postId) continue;
-      const sub = String(c.subreddit || "").toLowerCase();
+      const sub = c.subreddit.toLowerCase();
       if (!ALLOWED_SUBS_LOWER.has(sub)) continue;
-      if (typeof c.created_utc !== "number" || c.created_utc < cutoff) continue;
+      if (!c.createdUtc || c.createdUtc < cutoff) continue;
 
       let entry = byPost.get(postId);
       if (!entry) {
         entry = {
           commentIds: new Set<string>(),
           subreddit: c.subreddit,
-          postTitle: c.link_title || "",
-          latestUtc: c.created_utc,
+          postTitle: c.postTitle,
+          latestUtc: c.createdUtc,
         };
         byPost.set(postId, entry);
       }
       entry.commentIds.add(c.id);
-      if (c.created_utc > entry.latestUtc) entry.latestUtc = c.created_utc;
+      if (c.createdUtc > entry.latestUtc) entry.latestUtc = c.createdUtc;
     }
 
     if (byPost.size === 0) return;
@@ -424,19 +597,29 @@ async function checkReplies(env: Env) {
     for (let i = 0; i < sortedPosts.length; i++) {
       const [postId, info] = sortedPosts[i];
       try {
-        const postUrl = `https://www.reddit.com/comments/${postId}.json?raw_json=1&limit=200`;
-        const res = await redditProxyFetch(env, postUrl);
-        if (!res.ok) {
-          console.error(
-            `checkReplies: post ${postId} fetch failed ${res.status}`,
-          );
-          continue;
+        const postXml = await redditProxyFetchFirstText(env, [
+          `https://www.reddit.com/comments/${postId}/.rss?limit=100`,
+          `https://www.reddit.com/comments/${postId}.rss?limit=100`,
+          `https://old.reddit.com/comments/${postId}/.rss?limit=100`,
+          `https://old.reddit.com/comments/${postId}.rss?limit=100`,
+        ]);
+        if (!postXml) continue;
+        const tracked = new Map<string, UserCommentRef>();
+        for (const commentId of info.commentIds) {
+          tracked.set(commentId, {
+            id: commentId,
+            postId,
+            subreddit: info.subreddit,
+            postTitle: info.postTitle,
+            createdUtc: info.latestUtc,
+          });
         }
-        const data: any = await res.json();
-        if (!Array.isArray(data) || data.length < 2) continue;
-        const tree: any[] = data[1].data?.children || [];
-
-        const collected = findRepliesInTree(tree, info, postId, username);
+        const collected = parseRepliesFromPostFeed(
+          postXml,
+          postId,
+          tracked,
+          username,
+        );
         allReplies.push(...collected);
       } catch (err) {
         console.error(`checkReplies: post ${postId} error:`, err);
@@ -500,55 +683,6 @@ async function checkReplies(env: Env) {
   } catch (err) {
     console.error("checkReplies error:", err);
   }
-}
-
-function findRepliesInTree(
-  tree: any[],
-  info: { commentIds: Set<string>; subreddit: string; postTitle: string },
-  postId: string,
-  username: string,
-): FoundReply[] {
-  const found: FoundReply[] = [];
-  const userLower = username.toLowerCase();
-
-  function walk(nodes: any[]) {
-    for (const node of nodes) {
-      if (node.kind !== "t1") continue;
-      const c = node.data;
-      const parentId: string = c.parent_id || "";
-      // Only count if parent is one of our user's tracked comments
-      if (parentId.startsWith("t1_")) {
-        const parentCommentId = parentId.slice(3);
-        if (
-          info.commentIds.has(parentCommentId) &&
-          c.author &&
-          String(c.author).toLowerCase() !== userLower &&
-          c.id
-        ) {
-          found.push({
-            replyId: c.id,
-            replyAuthor: c.author,
-            replyBody: String(c.body || ""),
-            parentCommentId,
-            postId,
-            postTitle: info.postTitle,
-            subreddit: info.subreddit,
-            permalink: c.permalink
-              ? `https://www.reddit.com${c.permalink}`
-              : `https://www.reddit.com/comments/${postId}/_/${c.id}/`,
-            createdUtc:
-              typeof c.created_utc === "number" ? c.created_utc : 0,
-          });
-        }
-      }
-      if (c.replies && c.replies.data?.children) {
-        walk(c.replies.data.children);
-      }
-    }
-  }
-
-  walk(tree);
-  return found;
 }
 
 // ─── Web Push (RFC 8291) implementation for Cloudflare Workers ───────

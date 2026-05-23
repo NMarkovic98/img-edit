@@ -840,12 +840,13 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    const user = localStorage.getItem("reddit_username");
+    const user = "deandean91";
     const token = localStorage.getItem("app_token");
-    if (!user || !token) {
+    if (!token) {
       router.replace("/");
       return;
     }
+    localStorage.setItem("reddit_username", user);
     setRedditUser(user);
 
     const params = new URLSearchParams(window.location.search);

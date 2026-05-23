@@ -323,7 +323,7 @@ export function DimensionsBadge({ src }: { src: string }) {
 }
 
 // Authors that must never receive bot replies (test/own accounts)
-const BLOCKED_BOT_AUTHORS = new Set(["nmarkovic98"]);
+const BLOCKED_BOT_AUTHORS = new Set(["deandean91"]);
 export function isBlockedBotAuthor(author?: string | null): boolean {
   return !!author && BLOCKED_BOT_AUTHORS.has(author.toLowerCase());
 }
