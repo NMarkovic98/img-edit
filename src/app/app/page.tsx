@@ -747,22 +747,20 @@ export default function Dashboard() {
     isMuted,
     isMonitoring,
     subscribe,
-    unsubscribe,
     toggleMute,
     toggleMonitoring,
   } = usePushNotifications();
   const router = useRouter();
 
-  // Master notifications toggle — enables/disables push + sound + monitoring together
-  const allNotificationsOn = isSubscribed && !isMuted && isMonitoring;
+  // This toggle controls new-request alerts only. Push subscription stays active
+  // so solved reply notifications can keep arriving in the background.
+  const requestNotificationsOn = isSubscribed && !isMuted && isMonitoring;
   const toggleAllNotifications = async () => {
-    if (allNotificationsOn) {
-      // Turn everything off
-      if (isSubscribed) await unsubscribe();
-      if (!isMuted) toggleMute();
+    if (requestNotificationsOn) {
+      // Turn off new-request alerts, but keep solved reply push active.
       if (isMonitoring) toggleMonitoring();
     } else {
-      // Turn everything on
+      // Turn on push + sound + new-request alerts.
       if (!isSubscribed) await subscribe();
       if (isMuted) toggleMute();
       if (!isMonitoring) toggleMonitoring();
@@ -911,18 +909,29 @@ export default function Dashboard() {
                     onClick={toggleAllNotifications}
                     className="relative h-9 w-9 p-0"
                     title={
-                      allNotificationsOn
-                        ? "Notifications ON (push, sound, monitor) — tap to disable all"
-                        : "Notifications OFF — tap to enable all"
+                      requestNotificationsOn
+                        ? "New request alerts ON — tap to disable. Solved alerts stay on."
+                        : isSubscribed && !isMuted
+                          ? "New request alerts OFF. Solved alerts still active."
+                          : "Enable push notifications"
                     }
                   >
-                    {allNotificationsOn ? (
+                    {requestNotificationsOn ? (
                       <Bell className="h-4 w-4 text-green-500" />
                     ) : (
-                      <BellOff className="h-4 w-4 text-muted-foreground" />
+                      <BellOff
+                        className={`h-4 w-4 ${
+                          isSubscribed && !isMuted
+                            ? "text-amber-500"
+                            : "text-muted-foreground"
+                        }`}
+                      />
                     )}
-                    {allNotificationsOn && (
+                    {requestNotificationsOn && (
                       <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
+                    )}
+                    {!requestNotificationsOn && isSubscribed && !isMuted && (
+                      <div className="absolute top-1 right-1 w-2 h-2 bg-amber-500 rounded-full" />
                     )}
                   </Button>
                 )}

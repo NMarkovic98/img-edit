@@ -23,15 +23,21 @@ self.addEventListener("push", (event) => {
   }
 
   const isReply = data.type === "reply";
+  const isSolved = data.type === "solved";
   const vibrate =
     Array.isArray(data.vibrate) && data.vibrate.length
       ? data.vibrate
-      : isReply
+      : isSolved
+        ? [500, 200, 500, 200, 500]
+        : isReply
         ? [400, 200, 400, 200, 400]
         : [100, 50, 100];
 
+  const title = isSolved ? data.title || "✅ SOLVED EDIT!" : data.title || "Fixtral";
   const options = {
-    body: data.body || "New activity on Fixtral",
+    body: isSolved
+      ? `SOLVED · ${data.body || "Someone marked your edit as solved."}`
+      : data.body || "New activity on Fixtral",
     icon: data.icon || "/favicon.ico",
     badge: "/favicon.ico",
     vibrate,
@@ -42,17 +48,21 @@ self.addEventListener("push", (event) => {
       replyId: data.replyId,
       type: data.type,
     },
-    actions: data.actions || [
-      { action: "open", title: "Open" },
-      { action: "dismiss", title: "Dismiss" },
-    ],
+    actions: data.actions ||
+      (isSolved
+        ? [
+            { action: "open", title: "OPEN SOLVED" },
+            { action: "dismiss", title: "DISMISS" },
+          ]
+        : [
+            { action: "open", title: "Open" },
+            { action: "dismiss", title: "Dismiss" },
+          ]),
     tag: data.tag || "fixtral-notification",
     renotify: true,
   };
 
-  event.waitUntil(
-    self.registration.showNotification(data.title || "Fixtral", options),
-  );
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -63,26 +73,15 @@ self.addEventListener("notificationclick", (event) => {
   const d = event.notification.data || {};
   const rawUrl = d.url || "/app";
   const isAbsolute = /^https?:\/\//i.test(rawUrl);
-  const isReply = d.type === "reply";
+  const internalUrl = isAbsolute ? "/app" : rawUrl;
 
-  // For reply notifications with an absolute (Reddit) URL, open that URL directly.
-  // For everything else, focus an existing /app tab and deep-link to the post.
+  // Always stay inside the app; never navigate notification clicks to Reddit.
   event.waitUntil(
     (async () => {
       const clientList = await clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
-
-      if (isReply && isAbsolute) {
-        // Try to reuse an existing tab pointed at the same Reddit URL; otherwise open new
-        for (const client of clientList) {
-          if (client.url === rawUrl && "focus" in client) {
-            return client.focus();
-          }
-        }
-        return clients.openWindow(rawUrl);
-      }
 
       // Default: focus app tab, deep-link via postId
       for (const client of clientList) {
@@ -97,7 +96,7 @@ self.addEventListener("notificationclick", (event) => {
           return;
         }
       }
-      const target = d.postId ? `/app?post=${d.postId}` : rawUrl;
+      const target = d.postId ? `/app?post=${d.postId}` : internalUrl;
       return clients.openWindow(target);
     })(),
   );

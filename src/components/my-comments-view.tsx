@@ -25,6 +25,7 @@ interface MyComment {
   postThumbnailUrl?: string;
   postCommentCount?: number;
   replyCount: number;
+  solvedReplyCount?: number;
   topReplyAuthor?: string;
   topReplyBody?: string;
   commentTree?: CommentNode[];
@@ -250,13 +251,15 @@ export function MyCommentsView() {
   const stats = useMemo(() => {
     let upvoted = 0;
     let withReplies = 0;
+    let solved = 0;
     let totalScore = 0;
     for (const c of comments) {
       if (c.score > 1) upvoted += 1;
       if (c.replyCount > 0) withReplies += 1;
+      solved += c.solvedReplyCount || 0;
       totalScore += c.score;
     }
-    return { upvoted, withReplies, totalScore };
+    return { upvoted, withReplies, solved, totalScore };
   }, [comments]);
 
   const hasUsername = !!username;
@@ -270,7 +273,7 @@ export function MyCommentsView() {
           </h2>
           {hasUsername ? (
             <p className="text-xs text-muted-foreground mt-0.5">
-              u/{username} · {comments.length} comments
+              u/{username} · r/PhotoshopRequest · {comments.length} comments
               {lastFetched && (
                 <>
                   {" "}
@@ -328,7 +331,7 @@ export function MyCommentsView() {
       </div>
 
       {hasUsername && comments.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div className="rounded-md border bg-card p-2">
             <div className="text-muted-foreground">Total karma here</div>
             <div className="text-base font-semibold">{stats.totalScore}</div>
@@ -340,6 +343,12 @@ export function MyCommentsView() {
           <div className="rounded-md border bg-card p-2">
             <div className="text-muted-foreground">With replies</div>
             <div className="text-base font-semibold">{stats.withReplies}</div>
+          </div>
+          <div className="rounded-md border border-green-500/40 bg-green-500/10 p-2">
+            <div className="text-green-700 dark:text-green-300">Solved</div>
+            <div className="text-base font-semibold text-green-700 dark:text-green-300">
+              {stats.solved}
+            </div>
           </div>
         </div>
       )}
@@ -483,6 +492,11 @@ export function MyCommentsView() {
                       <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
                         <MessageCircle className="h-3.5 w-3.5" />
                         {c.replyCount} replies to you
+                      </span>
+                    )}
+                    {!!c.solvedReplyCount && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-1 text-green-700 dark:text-green-300">
+                        SOLVED x{c.solvedReplyCount}
                       </span>
                     )}
                   </div>

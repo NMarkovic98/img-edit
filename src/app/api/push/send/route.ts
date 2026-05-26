@@ -20,7 +20,18 @@ if (vapidPublicKey && vapidPrivateKey) {
 export async function POST(request: NextRequest) {
   if (!verifyAppToken(request)) return unauthorizedResponse();
   try {
-    const { title, body, url, tag, postId } = await request.json();
+    const {
+      title,
+      body,
+      url,
+      tag,
+      postId,
+      replyId,
+      type,
+      vibrate,
+      requireInteraction,
+      actions,
+    } = await request.json();
 
     if (!vapidPublicKey || !vapidPrivateKey) {
       return NextResponse.json(
@@ -35,6 +46,11 @@ export async function POST(request: NextRequest) {
       url: url || "/app",
       tag: tag || "fixtral-notification",
       postId,
+      replyId,
+      type,
+      vibrate,
+      requireInteraction,
+      actions,
     });
 
     const results = { success: 0, failed: 0, removed: 0 };

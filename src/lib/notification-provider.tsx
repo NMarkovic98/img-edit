@@ -20,6 +20,10 @@ const FETCH_INTERVAL = 10000; // 10 seconds
 const REPLY_CHECK_INTERVAL = 60000; // 60 seconds
 const REDDIT_USERNAME = "deandean91";
 
+function containsSolved(text?: string): boolean {
+  return /\bsolved\b/i.test(text || "");
+}
+
 function getRedditUsername(): string {
   if (typeof window === "undefined") return REDDIT_USERNAME;
   const stored = localStorage.getItem("reddit_username");
@@ -113,12 +117,15 @@ const PRIORITY_SUBREDDITS = new Set([
 const CHIME_PAID = generateChimeWav(1200, 0.8, 1.0); // High pitch, loud, longer
 const CHIME_FREE = generateChimeWav(600, 0.3, 0.5); // Low pitch, quiet, short
 const CHIME_REPLY = generateChimeWav(900, 0.5, 0.7);
+const CHIME_SOLVED = generateChimeWav(1400, 0.7, 1.0);
 
-function playChime(type: "paid" | "free" | "reply" = "free") {
+function playChime(type: "paid" | "free" | "reply" | "solved" = "free") {
   try {
     const src =
       type === "paid"
         ? CHIME_PAID
+        : type === "solved"
+          ? CHIME_SOLVED
         : type === "reply"
           ? CHIME_REPLY
           : CHIME_FREE;
@@ -133,6 +140,18 @@ function playChime(type: "paid" | "free" | "reply" = "free") {
         audio2.volume = 0.8;
         audio2.play().catch(() => {});
       }, 300);
+    }
+    if (type === "solved") {
+      setTimeout(() => {
+        const audio2 = new Audio(CHIME_SOLVED);
+        audio2.volume = 0.9;
+        audio2.play().catch(() => {});
+      }, 220);
+      setTimeout(() => {
+        const audio3 = new Audio(CHIME_SOLVED);
+        audio3.volume = 0.8;
+        audio3.play().catch(() => {});
+      }, 440);
     }
   } catch (e) {
     console.error("Chime error:", e);
@@ -163,9 +182,15 @@ function speak(message: string) {
 }
 
 // Combined: play chime then speak
-function notify(message: string, type: "paid" | "free" | "reply" = "free") {
+function notify(message: string, type: "paid" | "free" | "reply" | "solved" = "free") {
   playChime(type);
-  speak(type === "paid" ? `PAID REQUEST! ${message}` : message);
+  speak(
+    type === "paid"
+      ? `PAID REQUEST! ${message}`
+      : type === "solved"
+        ? `SOLVED EDIT! ${message}`
+        : message,
+  );
 }
 
 // Expose globally so user can test from browser console
@@ -448,10 +473,12 @@ export function NotificationProvider({
             .join(", ");
         };
 
-        // PAID gets urgent notification only
+        const requestAlertsEnabled = isMonitoringRef.current;
+
+        // PAID gets urgent notification only when request alerts are enabled.
         if (paidPosts.length > 0) {
           const msg = buildMessage(paidPosts);
-          if (!isMutedRef.current) {
+          if (requestAlertsEnabled && !isMutedRef.current) {
             notify(
               `${paidPosts.length} PAID request${paidPosts.length > 1 ? "s" : ""}: ${msg}`,
               "paid",
@@ -466,14 +493,6 @@ export function NotificationProvider({
             } else if ("vibrate" in navigator) {
               navigator.vibrate([200, 100, 200]);
             }
-          }
-
-          // Only send push from frontend if background monitor is off
-          if (!isMonitoringRef.current) {
-            sendPushNotification(
-              `PAID: ${paidPosts.length} new request${paidPosts.length > 1 ? "s" : ""}`,
-              msg,
-            );
           }
 
           // Dispatch special event for paid posts UI highlight
@@ -523,8 +542,41 @@ export function NotificationProvider({
       );
 
       if (newReplies.length > 0) {
+        const solvedReplies = newReplies.filter(
+          (r: any) => r.isSolved || containsSolved(r.replyBody),
+        );
+        if (solvedReplies.length > 0 && !isMutedRef.current) {
+          const authors = [
+            ...new Set(solvedReplies.map((r: any) => r.replyAuthor)),
+          ];
+          notify(
+            `${authors.join(" and ")} marked your edit as solved.`,
+            "solved",
+          );
+          if ("vibrate" in navigator) {
+            navigator.vibrate([500, 200, 500, 200, 500]);
+          }
+          if (!isMonitoringRef.current) {
+            sendPushNotification(
+              "✅ SOLVED EDIT!",
+              `${authors.join(" and ")} replied with solved.`,
+              {
+                tag: `fixtral-solved-${solvedReplies[0]?.replyId || Date.now()}`,
+                type: "solved",
+                vibrate: [500, 200, 500, 200, 500],
+                requireInteraction: true,
+                postId: solvedReplies[0]?.postId,
+                replyId: solvedReplies[0]?.replyId,
+              },
+            );
+          }
+        }
+
         const grouped: Record<string, string[]> = {};
-        for (const r of newReplies) {
+        const regularReplies = newReplies.filter(
+          (reply: any) => !solvedReplies.includes(reply),
+        );
+        for (const r of regularReplies) {
           if (!grouped[r.subreddit]) grouped[r.subreddit] = [];
           grouped[r.subreddit].push(r.replyAuthor);
         }
@@ -597,12 +649,16 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-async function sendPushNotification(title: string, body: string) {
+async function sendPushNotification(
+  title: string,
+  body: string,
+  options: Record<string, unknown> = {},
+) {
   try {
     await authedFetch("/api/push/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, body, url: "/app" }),
+      body: JSON.stringify({ title, body, url: "/app", ...options }),
     });
   } catch (error) {
     // Push send failed silently - not critical

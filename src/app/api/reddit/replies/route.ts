@@ -5,6 +5,11 @@ import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 const DEFAULT_USERNAME = "deandean91";
+const INCLUDED_REPLY_SUBS = new Set(["photoshoprequest"]);
+
+function containsSolved(text?: string): boolean {
+  return /\bsolved\b/i.test(text || "");
+}
 
 const COMMON_HEADERS = {
   "User-Agent":
@@ -166,6 +171,7 @@ interface FoundReply {
   permalink: string;
   createdUtc: number;
   parentCommentId: string;
+  isSolved: boolean;
 }
 
 function findParentCommentId(links: string[], ownId: string, candidates: Set<string>) {
@@ -220,6 +226,7 @@ function parseRepliesFromPostFeed(
         `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
       createdUtc: getCreatedUtc(block),
       parentCommentId,
+      isSolved: containsSolved(extractBody(getTag(block, "content"))),
     });
   }
 
@@ -265,6 +272,7 @@ export async function GET(req: NextRequest) {
 
     const byPost = new Map<string, Map<string, UserCommentRef>>();
     for (const comment of userComments) {
+      if (!INCLUDED_REPLY_SUBS.has(comment.subreddit.toLowerCase())) continue;
       if (!byPost.has(comment.postId)) byPost.set(comment.postId, new Map());
       byPost.get(comment.postId)?.set(comment.id, comment);
     }

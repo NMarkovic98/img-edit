@@ -5,7 +5,11 @@ import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 const DEFAULT_USERNAME = "deandean91";
-const EXCLUDED_SUBS = new Set(["beamazed"]);
+const INCLUDED_COMMENT_SUBS = new Set(["photoshoprequest"]);
+
+function containsSolved(text?: string): boolean {
+  return /\bsolved\b/i.test(text || "");
+}
 
 async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
@@ -121,6 +125,7 @@ interface MyComment {
   postPermalink: string;
   permalink: string;
   replyCount: number;
+  solvedReplyCount?: number;
   topReplyAuthor?: string;
   topReplyBody?: string;
   commentTree?: CommentNode[];
@@ -188,6 +193,7 @@ function parseAtomFeed(xml: string): MyComment[] {
 interface EnrichInfo {
   score: number;
   replyCount: number;
+  solvedReplyCount: number;
   topReplyAuthor?: string;
   topReplyBody?: string;
 }
@@ -309,10 +315,12 @@ function enrichFromTree(
 
   function countReplies(children: any[]): {
     count: number;
+    solvedCount: number;
     topAuthor?: string;
     topBody?: string;
   } {
     let count = 0;
+    let solvedCount = 0;
     let topAuthor: string | undefined;
     let topBody: string | undefined;
     function walk(ns: any[]) {
@@ -321,6 +329,7 @@ function enrichFromTree(
         const c = n.data;
         if (c.author?.toLowerCase() !== username.toLowerCase()) {
           count += 1;
+          if (containsSolved(c.body)) solvedCount += 1;
           if (!topAuthor) {
             topAuthor = c.author;
             topBody = (c.body || "").slice(0, 160);
@@ -332,7 +341,7 @@ function enrichFromTree(
       }
     }
     walk(children);
-    return { count, topAuthor, topBody };
+    return { count, solvedCount, topAuthor, topBody };
   }
 
   function walk(ns: any[]): boolean {
@@ -342,10 +351,11 @@ function enrichFromTree(
       if (c.id === targetCommentId) {
         const info = c.replies?.data?.children
           ? countReplies(c.replies.data.children)
-          : { count: 0 };
+          : { count: 0, solvedCount: 0 };
         found = {
           score: typeof c.score === "number" ? c.score : 0,
           replyCount: info.count,
+          solvedReplyCount: info.solvedCount,
           topReplyAuthor: info.topAuthor,
           topReplyBody: info.topBody,
         };
@@ -403,7 +413,7 @@ export async function GET(req: NextRequest) {
     }
     const xml = listing.text;
     const comments = parseAtomFeed(xml).filter(
-      (c) => !EXCLUDED_SUBS.has(c.subreddit.toLowerCase()),
+      (c) => INCLUDED_COMMENT_SUBS.has(c.subreddit.toLowerCase()),
     );
 
     let enrichedAny = false;
@@ -448,6 +458,7 @@ export async function GET(req: NextRequest) {
               if (info) {
                 comments[entry.idx].score = info.score;
                 comments[entry.idx].replyCount = info.replyCount;
+                comments[entry.idx].solvedReplyCount = info.solvedReplyCount;
                 comments[entry.idx].topReplyAuthor = info.topReplyAuthor;
                 comments[entry.idx].topReplyBody = info.topReplyBody;
                 enrichedAny = true;

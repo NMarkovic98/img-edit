@@ -1,5 +1,5 @@
 // Cloudflare Worker — background Reddit monitor with Web Push
-// Runs every minute via cron. Only active when monitoring is enabled via KV flag.
+// Runs every minute via cron. New-request alerts are gated by KV; solved replies stay on.
 
 export interface Env {
   KV: KVNamespace;
@@ -19,6 +19,7 @@ const KEY_PUSH_SUBS = "monitor:pushSubscriptions";
 const KEY_USERNAME = "monitor:username";
 
 const DEFAULT_USERNAME = "deandean91";
+const INCLUDED_REPLY_SUBS = new Set(["photoshoprequest"]);
 
 const SUBREDDITS = [
   "PhotoshopRequest",
@@ -27,18 +28,23 @@ const SUBREDDITS = [
   "editmyphoto",
 ];
 
+function containsSolved(text?: string): boolean {
+  return /\bsolved\b/i.test(text || "");
+}
+
 export default {
-  // Cron trigger — runs every minute. New-post check runs twice (0s + 30s).
-  // Reply check runs once per minute (heavier — fetches several post threads).
+  // Cron trigger — runs every minute. New-post check runs twice (0s + 30s) only
+  // when request monitoring is enabled. Solved/reply check always runs for subscribers.
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     const enabled = await env.KV.get(KEY_ENABLED);
+
+    // Reply check is independent from new-request notifications.
+    ctx.waitUntil(checkReplies(env));
+
     if (enabled !== "true") return;
 
     // First post check immediately
     await checkReddit(env);
-
-    // Reply check (independent of post check; fire-and-forget)
-    ctx.waitUntil(checkReplies(env));
 
     // Second post check after 30 seconds
     ctx.waitUntil(
@@ -357,6 +363,7 @@ interface FoundReply {
   subreddit: string;
   permalink: string;
   createdUtc: number;
+  isSolved: boolean;
 }
 
 interface UserCommentRef {
@@ -505,10 +512,11 @@ function parseRepliesFromPostFeed(
     const parent = trackedComments.get(parentCommentId);
     if (!parent) continue;
 
+    const replyBody = extractRssBody(getTag(block, "content"));
     found.push({
       replyId,
       replyAuthor,
-      replyBody: extractRssBody(getTag(block, "content")),
+      replyBody,
       parentCommentId,
       postId,
       postTitle: parent.postTitle,
@@ -517,6 +525,7 @@ function parseRepliesFromPostFeed(
         links.find((l) => /\/comments\//.test(l)) ||
         `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
       createdUtc: getRssCreatedUtc(block),
+      isSolved: containsSolved(replyBody),
     });
   }
 
@@ -565,6 +574,7 @@ async function checkReplies(env: Env) {
       if (!postId) continue;
       const sub = c.subreddit.toLowerCase();
       if (!ALLOWED_SUBS_LOWER.has(sub)) continue;
+      if (!INCLUDED_REPLY_SUBS.has(sub)) continue;
       if (!c.createdUtc || c.createdUtc < cutoff) continue;
 
       let entry = byPost.get(postId);
@@ -663,11 +673,25 @@ async function checkReplies(env: Env) {
         (reply.replyBody || "").trim() ||
         reply.postTitle ||
         "New reply to your comment";
+      if (reply.isSolved) {
+        await sendPushToAll(subs, env, {
+          title: "✅ SOLVED EDIT!",
+          body: `u/${reply.replyAuthor}: ${bodyPreview}`.slice(0, 180),
+          tag: `fixtral-solved-${reply.replyId}`,
+          url: "/app",
+          type: "solved",
+          vibrate: [500, 200, 500, 200, 500],
+          requireInteraction: true,
+          postId: reply.postId,
+          replyId: reply.replyId,
+        });
+        continue;
+      }
       await sendPushToAll(subs, env, {
         title: `💬 u/${reply.replyAuthor} replied in r/${reply.subreddit}`,
         body: bodyPreview.slice(0, 180),
         tag: `fixtral-reply-${reply.replyId}`,
-        url: reply.permalink,
+        url: "/app",
         type: "reply",
         vibrate: [400, 200, 400, 200, 400],
         requireInteraction: true,
