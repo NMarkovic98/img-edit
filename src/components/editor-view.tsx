@@ -341,10 +341,10 @@ function applyWatermarkToCanvas(
 
   const label = "u/deandean91";
   const angle = (-30 * Math.PI) / 180;
-  const fontSize = Math.max(18, Math.min(86, short * 0.045));
-  const strokeWidth = Math.max(2.5, fontSize * 0.14);
-  const rowGap = Math.max(fontSize * 3.1, short * 0.16);
-  const colGap = Math.max(fontSize * 4.8, long * 0.18);
+  const fontSize = Math.max(14, Math.min(54, short * 0.03));
+  const strokeWidth = Math.max(1.1, fontSize * 0.075);
+  const rowGap = Math.max(fontSize * 4.3, short * 0.22);
+  const colGap = Math.max(fontSize * 7.2, long * 0.28);
   const bounds = Math.sqrt(w * w + h * h);
 
   ctx.save();
@@ -352,7 +352,7 @@ function applyWatermarkToCanvas(
   ctx.rotate(angle);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = `700 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif`;
+  ctx.font = `650 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif`;
   ctx.lineJoin = "round";
   ctx.miterLimit = 2;
 
@@ -369,19 +369,19 @@ function applyWatermarkToCanvas(
       // Dual-tone text: black halo stays readable on light/gray images,
       // white fill stays readable on dark images.
       ctx.globalAlpha = 1;
-      ctx.lineWidth = strokeWidth * 2.15;
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
+      ctx.lineWidth = strokeWidth * 1.6;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.18)";
       ctx.strokeText(label, tx, y);
 
       ctx.lineWidth = strokeWidth;
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
       ctx.strokeText(label, tx, y);
 
-      ctx.fillStyle = "rgba(255, 255, 255, 0.30)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
       ctx.fillText(label, tx, y);
 
-      ctx.lineWidth = Math.max(1, strokeWidth * 0.35);
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.20)";
+      ctx.lineWidth = Math.max(0.75, strokeWidth * 0.28);
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.10)";
       ctx.strokeText(label, tx, y);
     }
     rowIndex++;
