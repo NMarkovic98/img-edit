@@ -339,91 +339,54 @@ function applyWatermarkToCanvas(
   const long = Math.max(w, h);
   const short = Math.min(w, h);
 
-  // ── Analyze image brightness ──
-  // Sample pixels across the image to determine if it's light or dark.
-  // Use a downsampled grid for speed — ~2500 samples is plenty.
-  const sampleStep = Math.max(1, Math.floor(short / 50));
-  let totalBrightness = 0;
-  let sampleCount = 0;
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const px = imgData.data;
-  for (let y = 0; y < h; y += sampleStep) {
-    for (let x = 0; x < w; x += sampleStep) {
-      const i = (y * w + x) * 4;
-      // Perceived brightness (ITU-R BT.601)
-      totalBrightness += px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
-      sampleCount++;
-    }
-  }
-  const avgBrightness = totalBrightness / sampleCount; // 0-255
+  const label = "u/deandean91";
+  const angle = (-30 * Math.PI) / 180;
+  const fontSize = Math.max(18, Math.min(86, short * 0.045));
+  const strokeWidth = Math.max(2.5, fontSize * 0.14);
+  const rowGap = Math.max(fontSize * 3.1, short * 0.16);
+  const colGap = Math.max(fontSize * 4.8, long * 0.18);
+  const bounds = Math.sqrt(w * w + h * h);
 
-  // Pick watermark color based on brightness:
-  // Dark image (avg < 100) → white lines
-  // Light image (avg > 160) → dark lines
-  // Mid range → blend between the two
-  const t = Math.max(0, Math.min(1, (avgBrightness - 100) / 60)); // 0=dark image, 1=light image
-  // Primary color: interpolate from white to black
-  const primary = Math.round(255 * (1 - t)); // 255 (white on dark img) → 0 (black on light img)
-  const primaryColor = `rgb(${primary},${primary},${primary})`;
-
-  // Scale lineWidth and opacity for resolution
-  // On 4K (short~2160): lw~7.2, on 1080p: lw~3.6
-  const lw = Math.max(1.5, short / 500);
-  const resBoost = Math.max(1, long / 1500);
-  const brightnessBoost = 1 + t * 0.5;
-  const alphaBoost = Math.min(2.0, resBoost * brightnessBoost);
-
-  // ── Perfect honeycomb tessellation ──
-  const r = Math.max(30, short * 0.045);
-  const hexW = r * 2;
-  const hexH = r * Math.sqrt(3);
-  const colStep = hexW * 0.75;
-  const rowStep = hexH;
-
-  function drawHex(cx: number, cy: number, radius: number) {
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = (Math.PI / 3) * i;
-      const px = cx + radius * Math.cos(a);
-      const py = cy + radius * Math.sin(a);
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-  }
-
-  // Honeycomb grid — only the hex outlines, nothing inside
   ctx.save();
-  ctx.globalAlpha = Math.min(0.12, 0.04 * alphaBoost);
-  ctx.strokeStyle = primaryColor;
-  ctx.lineWidth = lw;
-  for (let col = -1; col * colStep < w + hexW; col++) {
-    const cx = col * colStep;
-    const yOff = col % 2 === 0 ? 0 : hexH / 2;
-    for (let row = -1; row * rowStep < h + hexH; row++) {
-      const cy = row * rowStep + yOff;
-      drawHex(cx, cy, r);
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate(angle);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `700 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif`;
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
 
-  // Corner marks
-  const cornerFs = Math.max(11, short * 0.012);
-  const pad = cornerFs * 2;
-  ctx.save();
-  ctx.globalAlpha = Math.min(0.10, 0.05 * alphaBoost);
-  ctx.font = `400 ${cornerFs}px -apple-system, sans-serif`;
-  ctx.fillStyle = primaryColor;
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.fillText("PixelFixer", pad, pad);
-  ctx.textAlign = "right";
-  ctx.fillText("PixelFixer", w - pad, pad);
-  ctx.textBaseline = "bottom";
-  ctx.fillText("PixelFixer", w - pad, h - pad);
-  ctx.textAlign = "left";
-  ctx.fillText("PixelFixer", pad, h - pad);
+  const measured = ctx.measureText(label).width;
+  const stepX = Math.max(colGap, measured * 1.65);
+  const stepY = rowGap;
+  let rowIndex = 0;
+
+  for (let y = -bounds; y <= bounds; y += stepY) {
+    const offset = rowIndex % 2 === 0 ? 0 : stepX / 2;
+    for (let x = -bounds - stepX; x <= bounds + stepX; x += stepX) {
+      const tx = x + offset;
+
+      // Dual-tone text: black halo stays readable on light/gray images,
+      // white fill stays readable on dark images.
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = strokeWidth * 2.15;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
+      ctx.strokeText(label, tx, y);
+
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+      ctx.strokeText(label, tx, y);
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.30)";
+      ctx.fillText(label, tx, y);
+
+      ctx.lineWidth = Math.max(1, strokeWidth * 0.35);
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.20)";
+      ctx.strokeText(label, tx, y);
+    }
+    rowIndex++;
+  }
+
   ctx.restore();
 }
 

@@ -15,7 +15,6 @@ const SUBREDDITS = [
   "PhotoshopRequests",
   "estoration",
   "editmyphoto",
-  "BeAmazed",
 ];
 const FETCH_INTERVAL = 10000; // 10 seconds
 const REPLY_CHECK_INTERVAL = 60000; // 60 seconds

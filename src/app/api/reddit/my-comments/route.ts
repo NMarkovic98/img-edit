@@ -5,6 +5,7 @@ import type { NextRequest } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
 const DEFAULT_USERNAME = "deandean91";
+const EXCLUDED_SUBS = new Set(["beamazed"]);
 
 async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
@@ -401,7 +402,9 @@ export async function GET(req: NextRequest) {
       );
     }
     const xml = listing.text;
-    const comments = parseAtomFeed(xml);
+    const comments = parseAtomFeed(xml).filter(
+      (c) => !EXCLUDED_SUBS.has(c.subreddit.toLowerCase()),
+    );
 
     let enrichedAny = false;
     let enrichmentFailed = false;

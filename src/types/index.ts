@@ -37,36 +37,30 @@ export type EditCategory =
 
 // Face-safe models that preserve realistic faces
 export const FACE_SAFE_MODELS = [
-  "fal-ai/flux-pro/kontext",
-  "fal-ai/flux-pro/kontext/max",
-  "fal-ai/flux-2-pro/edit",
-  "fal-ai/flux-2-max/edit",
   "fal-ai/nano-banana-pro/edit",
+  "fal-ai/nano-banana-2/edit",
 ] as const;
 
 // Model routing table: category → [primary, ...fallbacks]
 export const CATEGORY_MODEL_MAP: Record<EditCategory, string[]> = {
-  remove_object: ["fal-ai/flux-pro/kontext", "fal-ai/flux-2-pro/edit"],
-  remove_background: ["bria-bg-remove", "fal-ai/flux-pro/kontext"], // special: bria pipeline
-  enhance_beautify: ["fal-ai/flux-2-pro/edit", "fal-ai/nano-banana-pro/edit"],
+  remove_object: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  remove_background: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  enhance_beautify: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
   restore_old_photo: [
-    "fal-ai/nano-banana-2/edit",
     "fal-ai/nano-banana-pro/edit",
+    "fal-ai/nano-banana-2/edit",
   ],
-  face_swap: ["fal-ai/flux-pro/kontext", "fal-ai/nano-banana-2/edit"],
-  add_object: ["fal-ai/flux-2-pro/edit", "fal-ai/nano-banana-2/edit"],
-  color_correction: ["fal-ai/flux-pro/kontext", "fal-ai/flux-2-pro/edit"],
-  scene_change: [
-    "fal-ai/bytedance/seedream/v5/lite/edit",
-    "fal-ai/flux-2-pro/edit",
-  ],
-  creative_fun: ["fal-ai/nano-banana-2/edit", "fal-ai/flux-pro/kontext"],
-  text_edit: ["fal-ai/flux-pro/kontext/max", "fal-ai/flux-pro/kontext"],
-  composite_multi: ["fal-ai/nano-banana-2/edit", "fal-ai/flux-2-pro/edit"],
-  body_modification: ["fal-ai/flux-pro/kontext", "fal-ai/nano-banana-pro/edit"],
+  face_swap: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  add_object: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  color_correction: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  scene_change: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  creative_fun: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  text_edit: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  composite_multi: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
+  body_modification: ["fal-ai/nano-banana-pro/edit", "fal-ai/nano-banana-2/edit"],
   professional_headshot: [
-    "fal-ai/flux-2-pro/edit",
-    "fal-ai/flux-pro/kontext/max",
+    "fal-ai/nano-banana-pro/edit",
+    "fal-ai/nano-banana-2/edit",
   ],
 };
 

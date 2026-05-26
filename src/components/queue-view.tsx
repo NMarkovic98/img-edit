@@ -89,7 +89,6 @@ const AVAILABLE_SUBREDDITS = [
   { id: "picrequests", label: "r/picrequests" },
   { id: "estoration", label: "r/estoration" },
   { id: "editmyphoto", label: "r/editmyphoto" },
-  { id: "BeAmazed", label: "r/BeAmazed" },
 ];
 
 // Fallback colors per subreddit if icon can't be loaded
@@ -159,72 +158,21 @@ interface ModelOption {
 
 function getModelOptions(w: number, h: number, isPaid = false): ModelOption[] {
   const max = Math.max(w, h);
-  const megapixels = Math.ceil((w * h) / 1_000_000);
-
-  const models: ModelOption[] = [];
-
-  if (max > 4096) {
-    // >4096 on any side → FLUX 2 Max + Seedream 4.5
-    const flux2MaxPrice = (0.03 + Math.max(0, megapixels - 1) * 0.015).toFixed(
-      2,
-    );
-    models.push(
-      {
-        id: "flux-2-max",
-        name: "FLUX 2 Max",
-        price: `~$${flux2MaxPrice}`,
-        tier: ">4K",
-      },
-      {
-        id: "seedream-4.5",
-        name: "Seedream 4.5",
-        price: "$0.04",
-        tier: ">4K",
-      },
-    );
-  } else if (max > 2048) {
-    // 2049–4096 → NB Pro 4K + NB 2 (4K)
-    models.push(
-      {
-        id: "nano-banana-pro",
-        name: "NB Pro 4K",
-        price: "$0.30",
-        tier: "4K",
-      },
-      {
-        id: "nano-banana-2",
-        name: "NB2 4K",
-        price: "$0.16",
-        tier: "4K",
-      },
-    );
-  } else {
-    // ≤2048 → NB Pro 2K
-    models.push({
+  const tier = max > 2048 ? "4K" : "2K";
+  return [
+    {
       id: "nano-banana-pro",
-      name: "NB Pro 2K",
-      price: "$0.15",
-      tier: "2K",
-    });
-  }
-
-  // Background removal — always available
-  models.push({
-    id: "bria-bg-remove",
-    name: "BG Remove",
-    price: "$0.018",
-    tier: "Util",
-  });
-
-  // Unblur / super-resolution — always available
-  models.push({
-    id: "aura-sr",
-    name: "Aura SR (Unblur)",
-    price: "~$0.01/MP",
-    tier: "Util",
-  });
-
-  return models;
+      name: `Nano Banana Pro ${tier}`,
+      price: tier === "4K" ? "$0.30" : "$0.15",
+      tier,
+    },
+    {
+      id: "nano-banana-2",
+      name: `Nano Banana 2 ${tier}`,
+      price: tier === "4K" ? "$0.16" : "$0.08",
+      tier,
+    },
+  ];
 }
 
 // Category label & model lookup for display
@@ -441,6 +389,9 @@ export function QueueView() {
   const [postUrlOverride, setPostUrlOverride] = useState<
     Record<string, string>
   >({});
+  const [expandedPosts, setExpandedPosts] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [subredditIcons, setSubredditIcons] = useState<Record<string, string | null>>({});
   const { showImage } = useImageViewer();
   const [, setTick] = useState(0);
@@ -1185,6 +1136,7 @@ export function QueueView() {
             })
             .map((post) => {
               const isNew = newPostIds.has(post.id);
+              const isExpanded = expandedPosts.has(post.id);
               return (
                 <Card
                   key={post.id}
@@ -1272,15 +1224,6 @@ export function QueueView() {
                             <Clock className="h-3 w-3 mr-1" />
                             {timeAgo(post.created_utc)}
                           </span>
-                          <a
-                            href={post.postUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center text-blue-600 hover:underline"
-                          >
-                            <ExternalLink className="h-3 w-3 mr-1" />
-                            Reddit
-                          </a>
                         </div>
                       </div>
                     </div>
@@ -1329,10 +1272,33 @@ export function QueueView() {
                       </div>
                     ) : null}
 
-                    {post.description && (
-                      <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 sm:line-clamp-3">
-                        {post.description}
-                      </p>
+                    {post.description && post.description !== post.title && (
+                      <div className="rounded-md border bg-muted/20 p-2.5 sm:p-3">
+                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Full post
+                        </div>
+                        <p
+                          className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed text-foreground/85 ${
+                            isExpanded ? "" : "line-clamp-3"
+                          }`}
+                        >
+                          {post.description}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedPosts((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(post.id)) next.delete(post.id);
+                              else next.add(post.id);
+                              return next;
+                            })
+                          }
+                          className="mt-2 min-h-[32px] rounded-md border px-2.5 text-xs font-semibold text-foreground hover:bg-muted"
+                        >
+                          {isExpanded ? "Collapse post" : "Read full post"}
+                        </button>
+                      </div>
                     )}
 
                     {/* Model selector + price + action */}
@@ -1363,7 +1329,7 @@ export function QueueView() {
                                     : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
                                 }`}
                               >
-                                Auto
+                                Auto NB
                               </button>
                               {models.map((m) => (
                                 <button
@@ -1402,7 +1368,7 @@ export function QueueView() {
                                   variant="outline"
                                   className="text-[9px] px-1 py-0 font-mono text-blue-500 border-blue-300"
                                 >
-                                  Auto
+                                  Auto NB
                                 </Badge>
                               )}
                             </div>

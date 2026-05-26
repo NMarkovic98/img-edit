@@ -7,7 +7,6 @@ import { fal } from "@fal-ai/client";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import type { EditCategory, AiPolicy } from "@/types";
-import { CATEGORY_MODEL_MAP, FACE_SAFE_MODELS } from "@/types";
 
 fal.config({
   credentials: process.env.FAL_KEY!,
@@ -322,12 +321,7 @@ function buildModelForId(
 
 // ---------------------------------------------------------------------------
 // Resolution-aware smart model selector
-// Budget: ≤$0.30/request OK. Pick best model that handles the resolution natively.
-//
-// Resolution routing:
-//   ≤2048px (both sides) → Nano Banana Pro 2K
-//   2049–4096px (both sides ≤4096) → Nano Banana Pro 4K + Nano Banana 2 (4K)
-//   >4096px (any side) → FLUX 2 Max + Seedream 4.5 (custom dims, exact output)
+// Only Nano Banana Pro and Nano Banana 2 are allowed for edit generation.
 // ---------------------------------------------------------------------------
 function selectModelsForCategory(
   category: EditCategory,
@@ -338,74 +332,14 @@ function selectModelsForCategory(
   dims: { width: number; height: number },
 ): ModelChoice[] {
   const maxSide = Math.max(dims.width, dims.height);
-
-  // For background removal, always use Bria first
-  if (category === "remove_background") {
-    return [briaBgRemove(imageUrl), fluxKontextPro(prompt, imageUrl)];
-  }
-
-  // Start with category-preferred models from the table
-  const categoryModelIds = [...CATEGORY_MODEL_MAP[category]];
-
-  let models: ModelChoice[];
-
-  if (maxSide > 4096) {
-    // Over 4096 on any side → FLUX 2 Max + Seedream 4.5 with exact custom dimensions
-    console.log(
-      `[edit] >4096 image (${dims.width}x${dims.height}) → FLUX2Max/Seedream4.5 custom dims routing`,
-    );
-    models = [
-      flux2Max(prompt, imageUrls, dims),
-      seedream45(prompt, imageUrls, dims),
-    ];
-  } else if (maxSide > 2048) {
-    // Between 2049-4096 (both sides ≤4096) → NB Pro 4K primary, NB 2 (4K) fallback
-    console.log(
-      `[edit] 2K-4K image (${dims.width}x${dims.height}) → NBPro 4K / NB2 4K routing`,
-    );
-    models = [
-      nanoBananaPro(prompt, imageUrls, "4K", dims),
-      nanoBanana2(prompt, imageUrls, "4K", dims),
-    ];
-    // Add compatible category fallbacks (skip low-res-only models)
-    for (const id of categoryModelIds) {
-      if (
-        id !== "fal-ai/flux-pro/kontext" &&
-        id !== "fal-ai/flux-pro/kontext/max"
-      ) {
-        const fallback = buildModelForId(id, prompt, imageUrl, imageUrls, dims);
-        if (!models.some((m) => m.modelId === fallback.modelId)) {
-          models.push(fallback);
-        }
-      }
-    }
-  } else {
-    // ≤2048 → Nano Banana Pro 2K primary
-    console.log(
-      `[edit] ≤2K image (${dims.width}x${dims.height}) → NBPro 2K routing`,
-    );
-    models = [nanoBananaPro(prompt, imageUrls, "2K", dims)];
-    // Add category-based fallbacks
-    for (const id of categoryModelIds) {
-      const fallback = buildModelForId(id, prompt, imageUrl, imageUrls, dims);
-      if (!models.some((m) => m.modelId === fallback.modelId)) {
-        models.push(fallback);
-      }
-    }
-  }
-
-  // Face-safe guard: if edit touches faces, filter out unsafe models
-  if (hasFaceEdit) {
-    const safeModels = models.filter(
-      (m) =>
-        (FACE_SAFE_MODELS as readonly string[]).includes(m.modelId) ||
-        m.modelId === "bria-bg-remove",
-    );
-    models =
-      safeModels.length > 0 ? safeModels : [fluxKontextPro(prompt, imageUrl)];
-  }
-
-  return models;
+  const nbRes = maxSide > 2048 ? "4K" : "2K";
+  console.log(
+    `[edit] ${category} | Face edit: ${hasFaceEdit} | ${dims.width}x${dims.height} → Nano Banana Pro / Nano Banana 2 only`,
+  );
+  return [
+    nanoBananaPro(prompt, imageUrls, nbRes, dims),
+    nanoBanana2(prompt, imageUrls, nbRes, dims),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -418,60 +352,15 @@ function resolveOverride(
   imageUrls: string[],
   dims: { width: number; height: number },
 ): ModelChoice | null {
+  const nbRes = Math.max(dims.width, dims.height) > 2048 ? "4K" : "2K";
   switch (overrideId) {
-    case "kontext-pro":
-      return fluxKontextPro(prompt, imageUrl);
-    case "kontext-max":
-      return fluxKontextMax(prompt, imageUrl);
-    case "flux-2-pro":
-      return flux2Pro(prompt, imageUrls, dims);
     case "nano-banana-2":
-      return nanoBanana2(
-        prompt,
-        imageUrls,
-        pickNanaBananaRes(dims.width, dims.height),
-      );
-    case "flux-2-max":
-      return flux2Max(prompt, imageUrls, dims);
-    case "seedream-4.5":
-      return seedream45(prompt, imageUrls, dims);
-    case "nano-banana-pro": {
-      // NB Pro cannot handle images >4096 on any side
-      if (Math.max(dims.width, dims.height) > 4096) {
-        console.log(
-          "[edit] NB Pro override rejected (>4096), using FLUX 2 Max",
-        );
-        return flux2Max(prompt, imageUrls, dims);
-      }
-      const r = pickNanaBananaRes(dims.width, dims.height);
-      return nanoBananaPro(prompt, imageUrls, r === "0.5K" ? "1K" : r, dims);
-    }
-    case "seedream-5-lite":
-      return seedream5Lite(prompt, imageUrls, dims);
-    case "bria-bg-remove":
-      return briaBgRemove(imageUrl);
-    // Legacy IDs
-    case "gpt-image":
-      return fluxKontextPro(prompt, imageUrl); // Replaced GPT with Kontext
+      return nanoBanana2(prompt, imageUrls, nbRes, dims);
+    case "nano-banana-pro":
     case "nano-banana-1k":
-      return nanoBananaPro(prompt, imageUrls, "1K", dims);
     case "nano-banana-2k":
-      return nanoBananaPro(prompt, imageUrls, "2K", dims);
-    case "nano-banana-4k": {
-      // NB Pro 4K cannot handle images >4096 on any side
-      if (Math.max(dims.width, dims.height) > 4096) {
-        console.log(
-          "[edit] NB Pro 4K override rejected (>4096), using FLUX 2 Max",
-        );
-        return flux2Max(prompt, imageUrls, dims);
-      }
-      return nanoBananaPro(prompt, imageUrls, "4K", dims);
-    }
-    case "seedream-2k":
-    case "seedream-4k":
-      return seedream5Lite(prompt, imageUrls, dims);
-    case "aura-sr":
-      return auraSR(imageUrl);
+    case "nano-banana-4k":
+      return nanoBananaPro(prompt, imageUrls, nbRes, dims);
     default:
       return null;
   }

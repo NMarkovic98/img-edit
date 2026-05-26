@@ -157,6 +157,7 @@ let lastPosts: any[] = [];
 // Fetch posts via Reddit OAuth API (preferred) or public JSON API (fallback)
 // Smaller subs get their own fetch so they don't get drowned out by PhotoshopRequest
 const SEPARATE_FETCH_SUBS = new Set(["photoshoprequests", "editmyphoto", "estoration", "picrequests"]);
+const EXCLUDED_SUBS = new Set(["beamazed"]);
 
 async function fetchSubredditPosts(sub: string, isOAuth: boolean, token?: string): Promise<any[]> {
   try {
@@ -198,6 +199,7 @@ async function fetchSubredditPosts(sub: string, isOAuth: boolean, token?: string
 async function fetchPostsViaAPI(
   subreddits: string[] = ["PhotoshopRequest"],
 ): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
+  subreddits = subreddits.filter((s) => !EXCLUDED_SUBS.has(s.toLowerCase()));
   const hasRedditCredentials =
     process.env.REDDIT_CLIENT_ID &&
     process.env.REDDIT_CLIENT_SECRET &&
