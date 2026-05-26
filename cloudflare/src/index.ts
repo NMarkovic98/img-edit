@@ -125,6 +125,28 @@ export default {
       }
     }
 
+    // POST /test-solved-push — send a solved-style push regardless of request-alert state
+    if (url.pathname === "/test-solved-push" && request.method === "POST") {
+      const subs = await getPushSubscriptions(env);
+      if (subs.length === 0) {
+        return json({ ok: false, error: "No subscriptions" }, corsHeaders, 400);
+      }
+      try {
+        await sendPushToAll(subs, env, {
+          title: "✅ SOLVED EDIT!",
+          body: "SOLVED · Test solved notification from Fixtral",
+          tag: `fixtral-solved-test-${Date.now()}`,
+          url: "/app",
+          type: "solved",
+          vibrate: [500, 200, 500, 200, 500],
+          requireInteraction: true,
+        });
+        return json({ ok: true, sentTo: subs.length }, corsHeaders);
+      } catch (err: any) {
+        return json({ ok: false, error: err.message }, corsHeaders, 500);
+      }
+    }
+
     // POST /toggle — enable/disable monitoring
     if (url.pathname === "/toggle" && request.method === "POST") {
       const body = (await request.json()) as any;
@@ -338,6 +360,7 @@ const ALLOWED_SUBS_LOWER = new Set(SUBREDDITS.map((s) => s.toLowerCase()));
 const REPLY_LOOKBACK_SECONDS = 48 * 60 * 60; // only care about posts user commented on in last 48h
 const REPLY_MAX_POSTS = 5; // cap on post threads we fetch per cron
 const REPLY_REQUEST_GAP_MS = 600;
+const FIRST_RUN_SOLVED_GRACE_SECONDS = 60 * 60;
 
 async function getSeenReplyIds(env: Env): Promise<Set<string>> {
   try {
@@ -532,6 +555,58 @@ function parseRepliesFromPostFeed(
   return found;
 }
 
+function parseRepliesFromPostJson(
+  json: any,
+  postId: string,
+  trackedComments: Map<string, UserCommentRef>,
+  username: string,
+): FoundReply[] {
+  const found: FoundReply[] = [];
+  const userLower = username.toLowerCase();
+
+  function walk(nodes: any[]) {
+    for (const node of nodes || []) {
+      if (node?.kind !== "t1") continue;
+      const c = node.data || {};
+      const replyId = String(c.id || "");
+      const parentCommentId = String(c.parent_id || "").replace(/^t1_/, "");
+      const parent = trackedComments.get(parentCommentId);
+      const replyAuthor = String(c.author || "");
+
+      if (
+        replyId &&
+        parent &&
+        replyAuthor &&
+        replyAuthor.toLowerCase() !== userLower
+      ) {
+        const replyBody = String(c.body || "").trim();
+        found.push({
+          replyId,
+          replyAuthor,
+          replyBody,
+          parentCommentId,
+          postId,
+          postTitle: parent.postTitle,
+          subreddit: parent.subreddit,
+          permalink: c.permalink
+            ? `https://www.reddit.com${c.permalink}`
+            : `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
+          createdUtc:
+            typeof c.created_utc === "number"
+              ? c.created_utc
+              : Math.floor(Date.now() / 1000),
+          isSolved: containsSolved(replyBody),
+        });
+      }
+
+      if (c.replies?.data?.children) walk(c.replies.data.children);
+    }
+  }
+
+  walk(json?.[1]?.data?.children || []);
+  return found;
+}
+
 async function redditProxyFetchFirstText(
   env: Env,
   urls: string[],
@@ -540,6 +615,19 @@ async function redditProxyFetchFirstText(
     const res = await redditProxyFetch(env, url);
     if (res.ok) return res.text();
     console.error(`reddit rss fetch failed ${res.status}: ${url}`);
+    if (res.status === 429) return null;
+  }
+  return null;
+}
+
+async function redditProxyFetchFirstJson(
+  env: Env,
+  urls: string[],
+): Promise<any | null> {
+  for (const url of urls) {
+    const res = await redditProxyFetch(env, url);
+    if (res.ok) return res.json();
+    console.error(`reddit json fetch failed ${res.status}: ${url}`);
     if (res.status === 429) return null;
   }
   return null;
@@ -592,6 +680,7 @@ async function checkReplies(env: Env) {
     }
 
     if (byPost.size === 0) return;
+    console.log(`checkReplies: tracking ${byPost.size} PhotoshopRequest post(s)`);
 
     // Most-recently-commented posts first, capped
     const sortedPosts = [...byPost.entries()]
@@ -606,13 +695,6 @@ async function checkReplies(env: Env) {
     for (let i = 0; i < sortedPosts.length; i++) {
       const [postId, info] = sortedPosts[i];
       try {
-        const postXml = await redditProxyFetchFirstText(env, [
-          `https://www.reddit.com/comments/${postId}/.rss?limit=100`,
-          `https://www.reddit.com/comments/${postId}.rss?limit=100`,
-          `https://old.reddit.com/comments/${postId}/.rss?limit=100`,
-          `https://old.reddit.com/comments/${postId}.rss?limit=100`,
-        ]);
-        if (!postXml) continue;
         const tracked = new Map<string, UserCommentRef>();
         for (const commentId of info.commentIds) {
           tracked.set(commentId, {
@@ -623,12 +705,27 @@ async function checkReplies(env: Env) {
             createdUtc: info.latestUtc,
           });
         }
-        const collected = parseRepliesFromPostFeed(
-          postXml,
-          postId,
-          tracked,
-          username,
-        );
+
+        const postJson = await redditProxyFetchFirstJson(env, [
+          `https://www.reddit.com/comments/${postId}.json?raw_json=1&limit=200`,
+          `https://old.reddit.com/comments/${postId}.json?raw_json=1&limit=200`,
+        ]);
+        let collected = postJson
+          ? parseRepliesFromPostJson(postJson, postId, tracked, username)
+          : [];
+
+        if (collected.length === 0) {
+          const postXml = await redditProxyFetchFirstText(env, [
+            `https://www.reddit.com/comments/${postId}/.rss?limit=100`,
+            `https://www.reddit.com/comments/${postId}.rss?limit=100`,
+            `https://old.reddit.com/comments/${postId}/.rss?limit=100`,
+            `https://old.reddit.com/comments/${postId}.rss?limit=100`,
+          ]);
+          collected = postXml
+            ? parseRepliesFromPostFeed(postXml, postId, tracked, username)
+            : [];
+        }
+
         allReplies.push(...collected);
       } catch (err) {
         console.error(`checkReplies: post ${postId} error:`, err);
@@ -641,6 +738,9 @@ async function checkReplies(env: Env) {
     }
 
     const freshReplies = allReplies.filter((r) => !seenIds.has(r.replyId));
+    console.log(
+      `checkReplies: observed ${allReplies.length} reply/replies, fresh ${freshReplies.length}`,
+    );
 
     // Persist all observed reply IDs (even non-fresh) so the set drifts forward
     if (allReplies.length > 0 && (freshReplies.length > 0 || isFirstRun)) {
@@ -649,6 +749,14 @@ async function checkReplies(env: Env) {
     }
 
     if (isFirstRun) {
+      const graceCutoff =
+        Date.now() / 1000 - FIRST_RUN_SOLVED_GRACE_SECONDS;
+      const firstRunSolvedReplies = allReplies.filter(
+        (r) => r.isSolved && r.createdUtc >= graceCutoff,
+      );
+      if (firstRunSolvedReplies.length > 0) {
+        await notifyReplies(env, firstRunSolvedReplies);
+      }
       console.log(
         `checkReplies first run: baselined ${allReplies.length} replies for u/${username}`,
       );
@@ -657,18 +765,29 @@ async function checkReplies(env: Env) {
 
     if (freshReplies.length === 0) return;
 
+    await notifyReplies(env, freshReplies);
+
+    console.log(
+      `checkReplies: notified ${freshReplies.length} new replies for u/${username}`,
+    );
+  } catch (err) {
+    console.error("checkReplies error:", err);
+  }
+}
+
+async function notifyReplies(env: Env, replies: FoundReply[]) {
     const subs = await getPushSubscriptions(env);
     if (subs.length === 0) {
       console.log(
-        `checkReplies: ${freshReplies.length} new replies but no subscribers`,
+        `checkReplies: ${replies.length} new replies but no subscribers`,
       );
       return;
     }
 
     // Sort oldest first so notifications arrive in chronological order
-    freshReplies.sort((a, b) => a.createdUtc - b.createdUtc);
+    replies.sort((a, b) => a.createdUtc - b.createdUtc);
 
-    for (const reply of freshReplies) {
+    for (const reply of replies) {
       const bodyPreview =
         (reply.replyBody || "").trim() ||
         reply.postTitle ||
@@ -699,13 +818,6 @@ async function checkReplies(env: Env) {
         replyId: reply.replyId,
       });
     }
-
-    console.log(
-      `checkReplies: notified ${freshReplies.length} new replies for u/${username}`,
-    );
-  } catch (err) {
-    console.error("checkReplies error:", err);
-  }
 }
 
 // ─── Web Push (RFC 8291) implementation for Cloudflare Workers ───────
