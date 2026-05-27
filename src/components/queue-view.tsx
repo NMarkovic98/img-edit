@@ -29,6 +29,7 @@ import {
   ShieldAlert,
   ChevronLeft,
   ChevronRight,
+  Layers,
   Sparkles,
   Upload,
   Send,
@@ -414,6 +415,9 @@ export function QueueView() {
   const [sendingBot, setSendingBot] = useState<
     Record<string, "watermarked" | "nowatermark" | null>
   >({});
+  const [openingPhotoshop, setOpeningPhotoshop] = useState<
+    Record<string, boolean>
+  >({});
   const [postUrlOverride, setPostUrlOverride] = useState<
     Record<string, string>
   >({});
@@ -744,6 +748,44 @@ export function QueueView() {
       delete next[postId];
       return next;
     });
+  };
+
+  const openPostImagesInPhotoshop = async (post: RedditPost) => {
+    const imageUrls =
+      post.allImages && post.allImages.length > 0
+        ? post.allImages
+        : post.imageUrl
+          ? [post.imageUrl]
+          : [];
+
+    if (imageUrls.length === 0) {
+      alert("No images found for this post.");
+      return;
+    }
+
+    setOpeningPhotoshop((prev) => ({ ...prev, [post.id]: true }));
+    try {
+      const response = await authedFetch("/api/photoshop/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: post.author,
+          images: imageUrls.map((url, index) => ({
+            url,
+            index: index + 1,
+          })),
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "Photoshop import failed");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Photoshop import failed");
+    } finally {
+      setOpeningPhotoshop((prev) => ({ ...prev, [post.id]: false }));
+    }
   };
 
   const sendManualToBot = async (
@@ -1404,6 +1446,20 @@ export function QueueView() {
                               )}
                             </div>
                             <div className="flex items-center gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-8 p-0"
+                                title="Download and open in Photoshop layers"
+                                onClick={() => openPostImagesInPhotoshop(post)}
+                                disabled={openingPhotoshop[post.id]}
+                              >
+                                {openingPhotoshop[post.id] ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Layers className="h-3.5 w-3.5 text-blue-500" />
+                                )}
+                              </Button>
                               <Button
                                 size="sm"
                                 variant="outline"
