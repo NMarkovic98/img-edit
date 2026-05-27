@@ -108,15 +108,25 @@ export async function GET(request: NextRequest) {
     const buf = Buffer.from(await res.arrayBuffer());
     const responseFilename = withExtension(safePathPart(filename), contentType);
     let savedPath: string | undefined;
+    let saveError: string | undefined;
 
     if (saveToPsr) {
-      const safeAuthor = safePathPart(author);
-      const safeImageIndex = safePathPart(imageIndex);
-      const extension = extensionFromContentType(contentType);
-      const authorDir = path.join(PSR_NOT_EDITED_DIR, safeAuthor);
-      savedPath = path.join(authorDir, `${safeAuthor}-${safeImageIndex}.${extension}`);
-      await mkdir(authorDir, { recursive: true });
-      await writeFile(savedPath, buf);
+      try {
+        const safeAuthor = safePathPart(author);
+        const safeImageIndex = safePathPart(imageIndex);
+        const extension = extensionFromContentType(contentType);
+        const authorDir = path.join(PSR_NOT_EDITED_DIR, safeAuthor);
+        savedPath = path.join(
+          authorDir,
+          `${safeAuthor}-${safeImageIndex}.${extension}`,
+        );
+        await mkdir(authorDir, { recursive: true });
+        await writeFile(savedPath, buf);
+      } catch (err) {
+        saveError = err instanceof Error ? err.message : "Unknown save error";
+        console.warn("[download] PSR save failed:", saveError);
+        savedPath = undefined;
+      }
     }
 
     return new NextResponse(buf, {
@@ -126,6 +136,7 @@ export async function GET(request: NextRequest) {
         "Content-Length": String(buf.length),
         "Cache-Control": "private, max-age=3600",
         ...(savedPath ? { "X-Saved-To": savedPath } : {}),
+        ...(saveError ? { "X-Save-Error": saveError } : {}),
       },
     });
   } catch (err) {

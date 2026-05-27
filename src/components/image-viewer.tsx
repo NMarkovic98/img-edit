@@ -103,8 +103,13 @@ export function ImageViewer({
       const savedPath = saveToPsrNotEdited
         ? res.headers.get("X-Saved-To")
         : null;
+      const saveError = saveToPsrNotEdited
+        ? res.headers.get("X-Save-Error")
+        : null;
       if (savedPath) {
         console.info(`Image saved to ${savedPath}`);
+      } else if (saveError) {
+        console.warn(`Image downloaded, but PSR local save failed: ${saveError}`);
       }
       const responseFilename =
         res.headers
