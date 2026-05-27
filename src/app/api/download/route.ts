@@ -3,6 +3,33 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
+
+const PSR_NOT_EDITED_DIR =
+  "/Users/nikolamarkovic/Desktop/private/photo-edit/PSR Not Edited";
+
+function safePathPart(value: string) {
+  return (
+    value
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/\s+/g, "_") || "unknown"
+  );
+}
+
+function extensionFromContentType(contentType: string) {
+  if (contentType.includes("jpeg") || contentType.includes("jpg")) return "jpg";
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("webp")) return "webp";
+  if (contentType.includes("gif")) return "gif";
+  return "png";
+}
+
+function withExtension(filename: string, contentType: string) {
+  if (path.extname(filename)) return filename;
+  return `${filename}.${extensionFromContentType(contentType)}`;
+}
 
 /**
  * GET /api/download?url=...&name=...
@@ -15,6 +42,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const imageUrl = searchParams.get("url");
   const filename = searchParams.get("name") || `pixelfixer-${Date.now()}.png`;
+  const saveToPsr = searchParams.get("psr") === "1";
+  const author = searchParams.get("author") || "unknown";
+  const imageIndex = searchParams.get("imageIndex") || "1";
 
   if (!imageUrl) {
     return NextResponse.json({ error: "url param required" }, { status: 400 });
@@ -57,13 +87,26 @@ export async function GET(request: NextRequest) {
     const contentType =
       res.headers.get("content-type") || "application/octet-stream";
     const buf = Buffer.from(await res.arrayBuffer());
+    const responseFilename = withExtension(safePathPart(filename), contentType);
+    let savedPath: string | undefined;
+
+    if (saveToPsr) {
+      const safeAuthor = safePathPart(author);
+      const safeImageIndex = safePathPart(imageIndex);
+      const extension = extensionFromContentType(contentType);
+      const authorDir = path.join(PSR_NOT_EDITED_DIR, safeAuthor);
+      savedPath = path.join(authorDir, `${safeImageIndex}.${extension}`);
+      await mkdir(authorDir, { recursive: true });
+      await writeFile(savedPath, buf);
+    }
 
     return new NextResponse(buf, {
       headers: {
         "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `attachment; filename="${responseFilename}"`,
         "Content-Length": String(buf.length),
         "Cache-Control": "private, max-age=3600",
+        ...(savedPath ? { "X-Saved-To": savedPath } : {}),
       },
     });
   } catch (err) {

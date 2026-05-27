@@ -42,6 +42,25 @@ import {
   DimensionsBadge,
 } from "./editor-view";
 
+function safeDownloadPart(value: string) {
+  return (
+    value
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/\s+/g, "_") || "unknown"
+  );
+}
+
+function psrDownloadOptions(post: RedditPost, imageIndex: number) {
+  const safeAuthor = safeDownloadPart(post.author);
+  return {
+    downloadFilename: `${safeAuthor}-${imageIndex}.png`,
+    downloadAuthor: post.author,
+    downloadImageIndex: imageIndex,
+    saveToPsrNotEdited: true,
+  };
+}
+
 interface RedditPost {
   id: string;
   title: string;
@@ -268,17 +287,25 @@ function ResolutionBadge({
 // Image slider component for multi-image gallery posts
 function ImageSlider({
   images,
+  post,
   postUrl,
   showImage,
   onDims,
 }: {
   images: string[];
+  post: RedditPost;
   postUrl: string;
   showImage: (
     src: string,
     title: string,
     downloadUrl: string,
     postUrl: string,
+    options?: {
+      downloadFilename?: string;
+      downloadAuthor?: string;
+      downloadImageIndex?: number;
+      saveToPsrNotEdited?: boolean;
+    },
   ) => void;
   onDims?: (w: number, h: number) => void;
 }) {
@@ -300,6 +327,7 @@ function ImageSlider({
             `Image ${currentIndex + 1} of ${images.length}`,
             images[currentIndex],
             postUrl,
+            psrDownloadOptions(post, currentIndex + 1),
           )
         }
       >
@@ -868,6 +896,7 @@ export function QueueView() {
                         `Reddit Image${analysisResult.originalPost.isGallery ? ` (1 of ${analysisResult.originalPost.imageCount})` : ""}`,
                         analysisResult.originalPost.imageUrl,
                         analysisResult.originalPost.postUrl,
+                        psrDownloadOptions(analysisResult.originalPost, 1),
                       )
                     }
                   >
@@ -1233,6 +1262,7 @@ export function QueueView() {
                     {post.allImages && post.allImages.length > 1 ? (
                       <ImageSlider
                         images={post.allImages}
+                        post={post}
                         postUrl={post.postUrl}
                         showImage={showImage}
                         onDims={(w, h) =>
@@ -1251,6 +1281,7 @@ export function QueueView() {
                             "Reddit Image",
                             post.imageUrl,
                             post.postUrl,
+                            psrDownloadOptions(post, 1),
                           )
                         }
                       >

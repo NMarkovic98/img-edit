@@ -16,6 +16,10 @@ interface ImageViewerProps {
   alt: string;
   onClose: () => void;
   downloadUrl?: string;
+  downloadFilename?: string;
+  downloadAuthor?: string;
+  downloadImageIndex?: number;
+  saveToPsrNotEdited?: boolean;
   externalUrl?: string;
 }
 
@@ -24,6 +28,10 @@ export function ImageViewer({
   alt,
   onClose,
   downloadUrl,
+  downloadFilename,
+  downloadAuthor,
+  downloadImageIndex,
+  saveToPsrNotEdited,
   externalUrl,
 }: ImageViewerProps) {
   const [zoom, setZoom] = useState(0.6); // Start with 60% zoom for better fit
@@ -75,16 +83,19 @@ export function ImageViewer({
 
   const handleDownload = async () => {
     if (!downloadUrl) return;
+    const filename = downloadFilename || `fixtral-image-${Date.now()}.png`;
     try {
       // Try proxy download first for instant save
       const token =
         typeof window !== "undefined"
           ? localStorage.getItem("app_token") || ""
           : "";
-      const params = new URLSearchParams({
-        url: downloadUrl,
-        name: `fixtral-image-${Date.now()}.png`,
-      });
+      const params = new URLSearchParams({ url: downloadUrl, name: filename });
+      if (saveToPsrNotEdited) params.set("psr", "1");
+      if (downloadAuthor) params.set("author", downloadAuthor);
+      if (downloadImageIndex) {
+        params.set("imageIndex", String(downloadImageIndex));
+      }
       const res = await fetch(`/api/download?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -93,7 +104,7 @@ export function ImageViewer({
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = `fixtral-image-${Date.now()}.png`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -102,7 +113,7 @@ export function ImageViewer({
       // Fallback to direct link
       const link = document.createElement("a");
       link.href = downloadUrl;
-      link.download = `fixtral-image-${Date.now()}.png`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -273,6 +284,12 @@ interface ImageViewerContextType {
     alt: string,
     downloadUrl?: string,
     externalUrl?: string,
+    options?: {
+      downloadFilename?: string;
+      downloadAuthor?: string;
+      downloadImageIndex?: number;
+      saveToPsrNotEdited?: boolean;
+    },
   ) => void;
   hideImage: () => void;
 }
@@ -287,6 +304,10 @@ export function ImageViewerProvider({ children }: { children: ReactNode }) {
     src: string;
     alt: string;
     downloadUrl?: string;
+    downloadFilename?: string;
+    downloadAuthor?: string;
+    downloadImageIndex?: number;
+    saveToPsrNotEdited?: boolean;
     externalUrl?: string;
   }>({
     isOpen: false,
@@ -299,12 +320,22 @@ export function ImageViewerProvider({ children }: { children: ReactNode }) {
     alt: string,
     downloadUrl?: string,
     externalUrl?: string,
+    options?: {
+      downloadFilename?: string;
+      downloadAuthor?: string;
+      downloadImageIndex?: number;
+      saveToPsrNotEdited?: boolean;
+    },
   ) => {
     setViewerState({
       isOpen: true,
       src,
       alt,
       downloadUrl,
+      downloadFilename: options?.downloadFilename,
+      downloadAuthor: options?.downloadAuthor,
+      downloadImageIndex: options?.downloadImageIndex,
+      saveToPsrNotEdited: options?.saveToPsrNotEdited,
       externalUrl,
     });
   };
@@ -321,6 +352,10 @@ export function ImageViewerProvider({ children }: { children: ReactNode }) {
           src={viewerState.src}
           alt={viewerState.alt}
           downloadUrl={viewerState.downloadUrl}
+          downloadFilename={viewerState.downloadFilename}
+          downloadAuthor={viewerState.downloadAuthor}
+          downloadImageIndex={viewerState.downloadImageIndex}
+          saveToPsrNotEdited={viewerState.saveToPsrNotEdited}
           externalUrl={viewerState.externalUrl}
           onClose={hideImage}
         />
