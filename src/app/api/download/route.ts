@@ -31,6 +31,21 @@ function withExtension(filename: string, contentType: string) {
   return `${filename}.${extensionFromContentType(contentType)}`;
 }
 
+function normalizeImageUrl(imageUrl: string) {
+  const url = new URL(imageUrl);
+  const wrappedUrl = url.searchParams.get("url");
+
+  if (
+    wrappedUrl &&
+    (url.hostname === "reddit.com" || url.hostname === "www.reddit.com") &&
+    url.pathname.startsWith("/media")
+  ) {
+    return wrappedUrl;
+  }
+
+  return imageUrl;
+}
+
 /**
  * GET /api/download?url=...&name=...
  * Proxies an image URL and returns it as a downloadable file.
@@ -40,13 +55,13 @@ export async function GET(request: NextRequest) {
   if (!verifyAppToken(request)) return unauthorizedResponse();
 
   const { searchParams } = new URL(request.url);
-  const imageUrl = searchParams.get("url");
+  const rawImageUrl = searchParams.get("url");
   const filename = searchParams.get("name") || `pixelfixer-${Date.now()}.png`;
   const saveToPsr = searchParams.get("psr") === "1";
   const author = searchParams.get("author") || "unknown";
   const imageIndex = searchParams.get("imageIndex") || "1";
 
-  if (!imageUrl) {
+  if (!rawImageUrl) {
     return NextResponse.json({ error: "url param required" }, { status: 400 });
   }
 
@@ -60,9 +75,13 @@ export async function GET(request: NextRequest) {
     "i.redd.it",
     "i.imgur.com",
     "preview.redd.it",
+    "external-preview.redd.it",
+    "redditmedia.com",
   ];
+  let imageUrl: string;
   let hostname: string;
   try {
+    imageUrl = normalizeImageUrl(rawImageUrl);
     hostname = new URL(imageUrl).hostname;
   } catch {
     return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
@@ -95,7 +114,7 @@ export async function GET(request: NextRequest) {
       const safeImageIndex = safePathPart(imageIndex);
       const extension = extensionFromContentType(contentType);
       const authorDir = path.join(PSR_NOT_EDITED_DIR, safeAuthor);
-      savedPath = path.join(authorDir, `${safeImageIndex}.${extension}`);
+      savedPath = path.join(authorDir, `${safeAuthor}-${safeImageIndex}.${extension}`);
       await mkdir(authorDir, { recursive: true });
       await writeFile(savedPath, buf);
     }

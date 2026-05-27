@@ -100,17 +100,33 @@ export function ImageViewer({
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Proxy failed");
+      const savedPath = saveToPsrNotEdited
+        ? res.headers.get("X-Saved-To")
+        : null;
+      if (savedPath) {
+        console.info(`Image saved to ${savedPath}`);
+      }
+      const responseFilename =
+        res.headers
+          .get("Content-Disposition")
+          ?.match(/filename="([^"]+)"/)?.[1] || filename;
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = filename;
+      link.download = responseFilename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(blobUrl);
-    } catch {
-      // Fallback to direct link
+    } catch (error) {
+      console.error("Image download failed:", error);
+      if (saveToPsrNotEdited) {
+        alert("Download failed. The image was not saved to PSR Not Edited.");
+        return;
+      }
+
+      // Fallback to direct link for non-PSR downloads.
       const link = document.createElement("a");
       link.href = downloadUrl;
       link.download = filename;
