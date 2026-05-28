@@ -313,8 +313,6 @@ function processRawPosts(allPosts: any[]) {
     return images;
   }
 
-  const MAX_DIM = 4096;
-
   // Extract known dimensions from Reddit metadata (no extra fetches)
   function getKnownDimensions(post: any): { w: number; h: number } | null {
     // Gallery: first image in media_metadata
@@ -345,52 +343,7 @@ function processRawPosts(allPosts: any[]) {
   console.log(`[processRawPosts] Raw posts per subreddit:`, subCounts);
 
   return posts
-    .filter((post: any) => {
-      const hasImage =
-        post.url &&
-        (post.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
-          post.url.includes("i.redd.it") ||
-          post.url.includes("i.imgur.com") ||
-          post.url.includes("imgur.com") ||
-          post.url.includes("redditmedia") ||
-          (post.preview &&
-            post.preview.images &&
-            post.preview.images.length > 0));
-      const isGallery = post.is_gallery === true && post.media_metadata;
-      const hasSelfPostImages =
-        post.is_self &&
-        post.media_metadata &&
-        Object.keys(post.media_metadata).length > 0;
-      // Also detect imgur album/page links that have preview images
-      const hasImgurLink = post.url && post.url.includes("imgur.com") && post.preview?.images?.length > 0;
-      const subLower = (post.subreddit || "").toLowerCase();
-      const isRecent = post.created_utc > twoHoursAgo;
-      // Skip all filters for high-value smaller subs — show everything
-      const NO_FILTER_SUBS = new Set(["photoshoprequests", "editmyphoto", "estoration"]);
-      if (NO_FILTER_SUBS.has(subLower)) {
-        // Check crosspost for images too
-        const crosspost = post.crosspost_parent_list?.[0];
-        const crossHasImage = crosspost && (
-          crosspost.url?.includes("i.redd.it") ||
-          crosspost.url?.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
-          crosspost.preview?.images?.length > 0 ||
-          (crosspost.is_gallery && crosspost.media_metadata)
-        );
-        const anyImage = hasImage || isGallery || hasSelfPostImages || hasImgurLink || crossHasImage;
-        if (!anyImage || !isRecent) return false;
-        return true;
-      }
-
-      if (!(hasImage || isGallery || hasSelfPostImages || hasImgurLink) || !isRecent) {
-        return false;
-      }
-      // Skip images that exceed AI model limits
-      const dims = getKnownDimensions(post);
-      if (dims && (dims.w > MAX_DIM || dims.h > MAX_DIM)) {
-        return false;
-      }
-      return true;
-    })
+    .filter((post: any) => post.created_utc > twoHoursAgo)
     .map((post: any) => {
       let imageUrl = post.url;
       let allImages: string[] = [];
