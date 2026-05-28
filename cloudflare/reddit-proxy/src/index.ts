@@ -102,39 +102,41 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string) {
     const directImage = hrefs.find((href) =>
       /(?:i|preview)\.redd\.it|i\.imgur\.com/i.test(href),
     );
-    const url = directImage || thumbnail;
+    const url = directImage || thumbnail || "";
 
-    if (!id || !title || !permalink || !url) continue;
+    if (!id || !title || !permalink) continue;
 
-    children.push({
-      kind: "t3",
-      data: {
-        id,
-        title,
-        selftext: stripHtml(rawContent) || title,
-        url,
-        author,
-        created_utc: published
-          ? Math.floor(new Date(published).getTime() / 1000)
-          : Math.floor(Date.now() / 1000),
-        permalink: new URL(permalink).pathname,
-        score: 0,
-        num_comments: 0,
-        subreddit,
-        thumbnail,
-        upvote_ratio: null,
-        link_flair_text: null,
-        preview: {
-          images: [
-            {
-              source: {
-                url,
-              },
+    const data: any = {
+      id,
+      title,
+      selftext: stripHtml(rawContent) || title,
+      url,
+      author,
+      created_utc: published
+        ? Math.floor(new Date(published).getTime() / 1000)
+        : Math.floor(Date.now() / 1000),
+      permalink: new URL(permalink).pathname,
+      score: 0,
+      num_comments: 0,
+      subreddit,
+      thumbnail,
+      upvote_ratio: null,
+      link_flair_text: null,
+    };
+
+    if (url) {
+      data.preview = {
+        images: [
+          {
+            source: {
+              url,
             },
-          ],
-        },
-      },
-    });
+          },
+        ],
+      };
+    }
+
+    children.push({ kind: "t3", data });
   }
 
   return children;
