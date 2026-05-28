@@ -2,8 +2,9 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, unlink, writeFile } from "fs/promises";
 import { promisify } from "util";
+import os from "os";
 import path from "path";
 import { verifyAppToken, unauthorizedResponse } from "@/lib/auth";
 
@@ -24,6 +25,10 @@ function safePathPart(value: string) {
       .replace(/[\\/:*?"<>|]+/g, "_")
       .replace(/\s+/g, "_") || "unknown"
   );
+}
+
+function buildDropBaseName(subreddit: string, postId: string) {
+  return `${safePathPart(subreddit)}_${safePathPart(postId)}`;
 }
 
 function extensionFromContentType(contentType: string) {
@@ -121,17 +126,32 @@ if (baseDoc) {
 
 async function openInPhotoshop(files: { path: string; name: string }[]) {
   const jsx = buildPhotoshopJsx(files);
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "fixtral-photoshop-"));
+  const jsxPath = path.join(tmpDir, "open-layers.jsx");
+  await writeFile(jsxPath, jsx, "utf8");
   const appleScript = `
 tell application id "com.adobe.Photoshop"
   activate
-  do javascript ${JSON.stringify(jsx)}
+  do javascript file (POSIX file ${JSON.stringify(jsxPath)})
 end tell
 `;
 
-  await execFileAsync("osascript", ["-e", appleScript], {
-    timeout: 60_000,
-    maxBuffer: 1024 * 1024,
-  });
+  try {
+    await execFileAsync("osascript", ["-e", appleScript], {
+      timeout: 60_000,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch (err) {
+    const detail =
+      err instanceof Error && "stderr" in err
+        ? String((err as Error & { stderr?: string }).stderr || err.message)
+        : err instanceof Error
+          ? err.message
+          : "Photoshop script failed";
+    throw new Error(detail.trim() || "Photoshop script failed");
+  } finally {
+    unlink(jsxPath).catch(() => {});
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -150,6 +170,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const author = safePathPart(String(body.author || "unknown"));
+    const subreddit = String(body.subreddit || "unknown");
+    const postId = String(body.postId || "unknown");
+    const dropBaseName = buildDropBaseName(subreddit, postId);
     const images = Array.isArray(body.images)
       ? (body.images as PhotoshopImage[])
       : [];
@@ -166,9 +189,10 @@ export async function POST(request: NextRequest) {
       const index = Number.isFinite(Number(image.index))
         ? Number(image.index)
         : files.length + 1;
-      const layerName = `${author}-${index}`;
-      const filePathBase = path.join(authorDir, layerName);
-      const savedPath = await downloadImage(image.url, filePathBase);
+      const layerName = `${dropBaseName}_${index}`;
+      const fileBaseName = index === 1 ? dropBaseName : layerName;
+      const firstFilePathBase = path.join(authorDir, fileBaseName);
+      const savedPath = await downloadImage(image.url, firstFilePathBase);
       files.push({ path: savedPath, name: layerName });
     }
 
@@ -178,6 +202,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       files,
       folder: authorDir,
+      dropBaseName,
     });
   } catch (err) {
     console.error("[photoshop/open] Failed:", err);

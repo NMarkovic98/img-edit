@@ -770,6 +770,8 @@ export function QueueView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           author: post.author,
+          subreddit: post.subreddit,
+          postId: post.id,
           images: imageUrls.map((url, index) => ({
             url,
             index: index + 1,
