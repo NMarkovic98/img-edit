@@ -22,3 +22,47 @@ Remote upload:
 ```text
 nmarkovic@192.168.0.26:~/reddit_drops/PhotoshopRequest_1tpfqz3.png
 ```
+
+## Using Vercel with local Photoshop
+
+Vercel cannot open Photoshop directly because it runs on a remote server. Start
+the local helper on the Mac that has Photoshop installed:
+
+```bash
+npm run photoshop-helper
+```
+
+Then the Vercel queue button can call:
+
+```text
+http://127.0.0.1:3999/photoshop/open
+```
+
+The helper downloads the post images, saves them to `PSR Not Edited`, and opens
+them in Photoshop as layers.
+
+To keep the helper always running on this Mac, install it as a launchd user
+service:
+
+```bash
+scripts/photoshop/install-local-helper-launchd.sh
+```
+
+Check it:
+
+```bash
+curl http://127.0.0.1:3999/health
+```
+
+View logs:
+
+```bash
+tail -f ~/Library/Logs/fixtral/photoshop-helper.out.log
+tail -f ~/Library/Logs/fixtral/photoshop-helper.err.log
+```
+
+Remove the service:
+
+```bash
+scripts/photoshop/uninstall-local-helper-launchd.sh
+```

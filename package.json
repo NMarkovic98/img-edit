@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "face-check": "node scripts/face-check.mjs"
+    "face-check": "node scripts/face-check.mjs",
+    "photoshop-helper": "node scripts/photoshop/local-helper.mjs"
   },
   "dependencies": {
     "@fal-ai/client": "^1.9.5",

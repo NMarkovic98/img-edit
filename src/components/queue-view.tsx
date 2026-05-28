@@ -763,25 +763,43 @@ export function QueueView() {
       return;
     }
 
+    const payload = {
+      author: post.author,
+      subreddit: post.subreddit,
+      postId: post.id,
+      images: imageUrls.map((url, index) => ({
+        url,
+        index: index + 1,
+      })),
+    };
+
     setOpeningPhotoshop((prev) => ({ ...prev, [post.id]: true }));
     try {
       const response = await authedFetch("/api/photoshop/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          author: post.author,
-          subreddit: post.subreddit,
-          postId: post.id,
-          images: imageUrls.map((url, index) => ({
-            url,
-            index: index + 1,
-          })),
-        }),
+        body: JSON.stringify(payload),
       });
       const result = await response.json();
 
       if (!response.ok || !result.ok) {
-        throw new Error(result.error || "Photoshop import failed");
+        const helperUrl =
+          localStorage.getItem("photoshop_helper_url") ||
+          "http://127.0.0.1:3999/photoshop/open";
+        const helperResponse = await fetch(helperUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const helperResult = await helperResponse.json();
+
+        if (!helperResponse.ok || !helperResult.ok) {
+          throw new Error(
+            helperResult.error ||
+              result.error ||
+              "Photoshop import failed. Start the local helper with npm run photoshop-helper.",
+          );
+        }
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Photoshop import failed");
