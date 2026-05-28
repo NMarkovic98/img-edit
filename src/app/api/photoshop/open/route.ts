@@ -116,12 +116,15 @@ for (var i = 0; i < files.length; i++) {
     var layerDoc = app.open(f);
     app.activeDocument = layerDoc;
     layerDoc.selection.selectAll();
-    layerDoc.selection.copy(true);
+    layerDoc.selection.copy();
     layerDoc.close(SaveOptions.DONOTSAVECHANGES);
     app.activeDocument = baseDoc;
     baseDoc.paste();
     try {
       baseDoc.activeLayer.name = files[i].name;
+    } catch (e) {}
+    try {
+      baseDoc.selection.deselect();
     } catch (e) {}
   }
 }
