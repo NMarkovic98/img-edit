@@ -102,31 +102,39 @@ var files = ${payload};
 app.displayDialogs = DialogModes.NO;
 var baseDoc = null;
 
+function baseNameFromLayerName(name) {
+  return String(name).replace(/_[0-9]+$/, "");
+}
+
 for (var i = 0; i < files.length; i++) {
   var f = new File(files[i].path);
-  if (i === 0) {
-    baseDoc = app.open(f);
-    try {
-      baseDoc.activeLayer.isBackgroundLayer = false;
-    } catch (e) {}
-    try {
-      baseDoc.activeLayer.name = files[i].name;
-    } catch (e) {}
-  } else {
-    var layerDoc = app.open(f);
-    app.activeDocument = layerDoc;
-    layerDoc.selection.selectAll();
-    layerDoc.selection.copy();
+  var layerDoc = app.open(f);
+  app.activeDocument = layerDoc;
+  layerDoc.selection.selectAll();
+  layerDoc.selection.copy();
+
+  if (baseDoc === null) {
+    baseDoc = app.documents.add(
+      layerDoc.width,
+      layerDoc.height,
+      layerDoc.resolution,
+      baseNameFromLayerName(files[0].name),
+      NewDocumentMode.RGB,
+      DocumentFill.TRANSPARENT
+    );
     layerDoc.close(SaveOptions.DONOTSAVECHANGES);
-    app.activeDocument = baseDoc;
-    baseDoc.paste();
-    try {
-      baseDoc.activeLayer.name = files[i].name;
-    } catch (e) {}
-    try {
-      baseDoc.selection.deselect();
-    } catch (e) {}
+  } else {
+    layerDoc.close(SaveOptions.DONOTSAVECHANGES);
   }
+
+  app.activeDocument = baseDoc;
+  baseDoc.paste();
+  try {
+    baseDoc.activeLayer.name = files[i].name;
+  } catch (e) {}
+  try {
+    baseDoc.selection.deselect();
+  } catch (e) {}
 }
 
 if (baseDoc) {
