@@ -107,14 +107,22 @@ for (var i = 0; i < files.length; i++) {
   if (i === 0) {
     baseDoc = app.open(f);
     try {
+      baseDoc.activeLayer.isBackgroundLayer = false;
+    } catch (e) {}
+    try {
       baseDoc.activeLayer.name = files[i].name;
     } catch (e) {}
   } else {
     var layerDoc = app.open(f);
-    var duplicated = layerDoc.activeLayer.duplicate(baseDoc, ElementPlacement.PLACEATBEGINNING);
-    duplicated.name = files[i].name;
+    app.activeDocument = layerDoc;
+    layerDoc.selection.selectAll();
+    layerDoc.selection.copy(true);
     layerDoc.close(SaveOptions.DONOTSAVECHANGES);
     app.activeDocument = baseDoc;
+    baseDoc.paste();
+    try {
+      baseDoc.activeLayer.name = files[i].name;
+    } catch (e) {}
   }
 }
 
