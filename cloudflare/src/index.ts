@@ -14,12 +14,7 @@ export interface Env {
 // KV keys
 const KEY_ENABLED = "monitor:enabled";
 const KEY_SEEN_IDS = "monitor:seenIds";
-const KEY_SEEN_REPLY_IDS = "monitor:seenReplyIds";
 const KEY_PUSH_SUBS = "monitor:pushSubscriptions";
-const KEY_USERNAME = "monitor:username";
-
-const DEFAULT_USERNAME = "deandean91";
-const INCLUDED_REPLY_SUBS = new Set(["photoshoprequest"]);
 
 const SUBREDDITS = [
   "PhotoshopRequest",
@@ -28,25 +23,13 @@ const SUBREDDITS = [
   "editmyphoto",
 ];
 
-function containsSolved(text?: string): boolean {
-  return /\bsolved\b/i.test(text || "");
-}
-
 export default {
-  // Cron trigger — runs every minute. New-post check runs twice (0s + 30s) only
-  // when request monitoring is enabled. Solved/reply check always runs for subscribers.
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     const enabled = await env.KV.get(KEY_ENABLED);
-
-    // Reply check is independent from new-request notifications.
-    ctx.waitUntil(checkReplies(env));
-
     if (enabled !== "true") return;
 
-    // First post check immediately
     await checkReddit(env);
 
-    // Second post check after 30 seconds
     ctx.waitUntil(
       new Promise<void>((resolve) =>
         setTimeout(async () => {
@@ -74,77 +57,74 @@ export default {
     if (url.pathname === "/status" && request.method === "GET") {
       const enabled = (await env.KV.get(KEY_ENABLED)) === "true";
       const subs = await getPushSubscriptions(env);
-      const username = (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
       return json(
-        { enabled, subscriptionCount: subs.length, username },
+        { enabled, subscriptionCount: subs.length },
         corsHeaders,
       );
     }
 
-    // GET /username — read monitored username
-    if (url.pathname === "/username" && request.method === "GET") {
-      const username = (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
-      return json({ ok: true, username }, corsHeaders);
+    // GET /debug-raw?url=<encoded-reddit-url> — return raw proxy response
+    if (url.pathname === "/debug-raw" && request.method === "GET") {
+      const target = url.searchParams.get("url");
+      if (!target) {
+        return json({ ok: false, error: "url param required" }, corsHeaders, 400);
+      }
+      const res = await redditProxyFetch(env, target);
+      const text = await res.text();
+      return new Response(text, {
+        status: res.status,
+        headers: {
+          "Content-Type": res.headers.get("Content-Type") || "text/plain",
+          ...corsHeaders,
+        },
+      });
     }
 
-    // POST /username — set monitored username
-    if (url.pathname === "/username" && request.method === "POST") {
-      const body = (await request.json()) as any;
-      const next = (body.username || "").toString().trim().replace(/^u\//, "");
-      if (!next) {
-        return json({ ok: false, error: "username required" }, corsHeaders, 400);
-      }
-      const prev = await env.KV.get(KEY_USERNAME);
-      await env.KV.put(KEY_USERNAME, next);
-      // If username changed, clear seen-reply cache so we re-baseline
-      if (prev !== next) {
-        await env.KV.delete(KEY_SEEN_REPLY_IDS);
-      }
-      return json({ ok: true, username: next }, corsHeaders);
-    }
-
-    // POST /test-reply-push — send a test reply-style push to debug ringing
-    if (url.pathname === "/test-reply-push" && request.method === "POST") {
-      const subs = await getPushSubscriptions(env);
-      if (subs.length === 0) {
-        return json({ ok: false, error: "No subscriptions" }, corsHeaders, 400);
-      }
+    // GET /debug-fetch?sub=PhotoshopRequest — proxy-side debug for queue posts
+    if (url.pathname === "/debug-fetch" && request.method === "GET") {
+      const sub = url.searchParams.get("sub") || "PhotoshopRequest";
+      const limit = url.searchParams.get("limit") || "10";
+      const redditUrl = `https://www.reddit.com/r/${sub}/new.json?limit=${limit}&raw_json=1`;
+      const res = await redditProxyFetch(env, redditUrl);
+      const text = await res.text();
+      let data: any = null;
       try {
-        await sendPushToAll(subs, env, {
-          title: "💬 Test reply",
-          body: "If you see this and feel three vibrations, replies work.",
-          tag: `fixtral-reply-test-${Date.now()}`,
-          url: "/app",
-          type: "reply",
-          vibrate: [400, 200, 400, 200, 400],
-          requireInteraction: true,
-        });
-        return json({ ok: true, sentTo: subs.length }, corsHeaders);
-      } catch (err: any) {
-        return json({ ok: false, error: err.message }, corsHeaders, 500);
+        data = JSON.parse(text);
+      } catch {
+        return json(
+          {
+            ok: false,
+            status: res.status,
+            bodyLen: text.length,
+            bodyPreview: text.slice(0, 600),
+          },
+          corsHeaders,
+        );
       }
-    }
-
-    // POST /test-solved-push — send a solved-style push regardless of request-alert state
-    if (url.pathname === "/test-solved-push" && request.method === "POST") {
-      const subs = await getPushSubscriptions(env);
-      if (subs.length === 0) {
-        return json({ ok: false, error: "No subscriptions" }, corsHeaders, 400);
-      }
-      try {
-        await sendPushToAll(subs, env, {
-          title: "✅ SOLVED EDIT!",
-          body: "SOLVED · Test solved notification from Fixtral",
-          tag: `fixtral-solved-test-${Date.now()}`,
-          url: "/app",
-          type: "solved",
-          vibrate: [500, 200, 500, 200, 500],
-          requireInteraction: true,
-        });
-        return json({ ok: true, sentTo: subs.length }, corsHeaders);
-      } catch (err: any) {
-        return json({ ok: false, error: err.message }, corsHeaders, 500);
-      }
+      const children = data?.data?.children || [];
+      const sample = children.slice(0, 3).map((c: any) => ({
+        id: c?.data?.id,
+        title: c?.data?.title,
+        url: c?.data?.url,
+        created_utc: c?.data?.created_utc,
+        ago_minutes: c?.data?.created_utc
+          ? Math.round((Date.now() / 1000 - c.data.created_utc) / 60)
+          : null,
+        subreddit: c?.data?.subreddit,
+      }));
+      return json(
+        {
+          ok: true,
+          status: res.status,
+          bodyLen: text.length,
+          dataKeys: data ? Object.keys(data) : null,
+          dataDataKeys: data?.data ? Object.keys(data.data) : null,
+          count: children.length,
+          rawPreview: text.slice(0, 400),
+          sample,
+        },
+        corsHeaders,
+      );
     }
 
     // POST /toggle — enable/disable monitoring
@@ -277,20 +257,28 @@ async function redditProxyFetch(env: Env, redditUrl: string): Promise<Response> 
   return env.REDDIT_PROXY.fetch(proxyRequestUrl, { headers: proxyHeaders });
 }
 
+async function fetchSubPosts(env: Env, sub: string): Promise<any[]> {
+  try {
+    const redditUrl = `https://www.reddit.com/r/${sub}/new.json?limit=25&raw_json=1`;
+    const res = await redditProxyFetch(env, redditUrl);
+    if (!res.ok) {
+      console.error(`Reddit fetch failed for r/${sub}: ${res.status}`);
+      return [];
+    }
+    const data = (await res.json()) as any;
+    return (data.data?.children || []).map((c: any) => c.data);
+  } catch (err) {
+    console.error(`fetchSubPosts error for r/${sub}:`, err);
+    return [];
+  }
+}
+
 async function checkReddit(env: Env) {
   try {
-    const multiSub = SUBREDDITS.join("+");
-    const redditUrl = `https://www.reddit.com/r/${multiSub}/new.json?limit=50&raw_json=1`;
-    const res = await redditProxyFetch(env, redditUrl);
-
-    if (!res.ok) {
-      const body = await res.text();
-      console.error(`Reddit fetch failed: ${res.status} — ${body.substring(0, 200)}`);
-      return;
-    }
-
-    const data = (await res.json()) as any;
-    const posts = (data.data?.children || []).map((c: any) => c.data);
+    const perSub = await Promise.all(
+      SUBREDDITS.map((sub) => fetchSubPosts(env, sub)),
+    );
+    const posts = perSub.flat();
 
     // Filter to image posts from last 2 hours
     const twoHoursAgo = Date.now() / 1000 - 2 * 60 * 60;
@@ -350,474 +338,6 @@ async function checkReddit(env: Env) {
   } catch (err) {
     console.error("checkReddit error:", err);
   }
-}
-
-// ─── Reply monitoring ────────────────────────────────────────────────
-// Polls Reddit for u/{username}'s recent comments, then walks each commented
-// post's tree to find new replies. Sends a 3-pulse push for each new reply.
-
-const ALLOWED_SUBS_LOWER = new Set(SUBREDDITS.map((s) => s.toLowerCase()));
-const REPLY_LOOKBACK_SECONDS = 48 * 60 * 60; // only care about posts user commented on in last 48h
-const REPLY_MAX_POSTS = 5; // cap on post threads we fetch per cron
-const REPLY_REQUEST_GAP_MS = 600;
-const FIRST_RUN_SOLVED_GRACE_SECONDS = 60 * 60;
-
-async function getSeenReplyIds(env: Env): Promise<Set<string>> {
-  try {
-    const raw = await env.KV.get(KEY_SEEN_REPLY_IDS);
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {}
-  return new Set();
-}
-
-async function saveSeenReplyIds(env: Env, ids: Set<string>) {
-  // Keep last 1000 IDs
-  const arr = [...ids].slice(-1000);
-  await env.KV.put(KEY_SEEN_REPLY_IDS, JSON.stringify(arr));
-}
-
-interface FoundReply {
-  replyId: string;
-  replyAuthor: string;
-  replyBody: string;
-  parentCommentId: string;
-  postId: string;
-  postTitle: string;
-  subreddit: string;
-  permalink: string;
-  createdUtc: number;
-  isSolved: boolean;
-}
-
-interface UserCommentRef {
-  id: string;
-  postId: string;
-  subreddit: string;
-  postTitle: string;
-  createdUtc: number;
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#032;|&#32;/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#x27;/g, "'")
-    .replace(/&apos;/g, "'");
-}
-
-function getTag(block: string, tag: string): string {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
-  return decodeEntities(re.exec(block)?.[1]?.trim() || "");
-}
-
-function getLinks(block: string): string[] {
-  return [...block.matchAll(/<link[^>]*href="([^"]+)"/gi)].map((m) =>
-    decodeEntities(m[1]),
-  );
-}
-
-function extractRssBody(rawContent: string): string {
-  let html = decodeEntities(rawContent)
-    .replace(/^<!\[CDATA\[/, "")
-    .replace(/\]\]>$/, "")
-    .replace(/<!--\s*SC_OFF\s*-->/gi, "")
-    .replace(/<!--\s*SC_ON\s*-->/gi, "");
-
-  const submittedIdx = html.search(/submitted\s+by/i);
-  if (submittedIdx > 0) html = html.slice(0, submittedIdx);
-
-  html = html.replace(/<\/p>/gi, "\n").replace(/<br\s*\/?>/gi, "\n");
-  html = html.replace(/<[^>]+>/g, "");
-  return decodeEntities(html).replace(/\n{3,}/g, "\n\n").trim();
-}
-
-function getRssCommentId(block: string): string {
-  return getTag(block, "id").replace(/^t1_/, "");
-}
-
-function getRssAuthor(block: string): string {
-  const authorBlock = /<author[^>]*>([\s\S]*?)<\/author>/i.exec(block)?.[1] || "";
-  return getTag(authorBlock, "name").replace(/^\/?u\//i, "");
-}
-
-function getRssCreatedUtc(block: string): number {
-  const raw = getTag(block, "published") || getTag(block, "updated");
-  return raw ? Math.floor(new Date(raw).getTime() / 1000) : 0;
-}
-
-function extractRssPostId(url: string): string {
-  return /\/comments\/([A-Za-z0-9]+)\//.exec(url)?.[1] || "";
-}
-
-function extractRssSubreddit(block: string, links: string[]): string {
-  const category = /<category[^>]*term="([^"]+)"/i.exec(block)?.[1];
-  if (category) return decodeEntities(category);
-  const link = links.find((l) => /\/r\/[^/]+\/comments\//i.test(l));
-  return /\/r\/([^/]+)\//i.exec(link || "")?.[1] || "";
-}
-
-function extractRssPostTitle(block: string): string {
-  const title = getTag(block, "title");
-  const prefixed = /^\/?u\/[^ ]+\s+(?:comments?\s+)?on\s+([\s\S]+)$/i.exec(title);
-  if (prefixed) return prefixed[1].trim();
-  const plain = /comments?\s+on\s+([\s\S]+)$/i.exec(title);
-  return plain ? plain[1].trim() : title;
-}
-
-function parseUserCommentRefs(xml: string): UserCommentRef[] {
-  const refs: UserCommentRef[] = [];
-  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-  let m: RegExpExecArray | null;
-
-  while ((m = entryRe.exec(xml)) !== null) {
-    const block = m[1];
-    const id = getRssCommentId(block);
-    const links = getLinks(block);
-    const permalink = links.find((l) => /\/comments\//.test(l)) || "";
-    const postId = extractRssPostId(permalink);
-    if (!id || !postId) continue;
-
-    refs.push({
-      id,
-      postId,
-      subreddit: extractRssSubreddit(block, links),
-      postTitle: extractRssPostTitle(block),
-      createdUtc: getRssCreatedUtc(block),
-    });
-  }
-
-  return refs;
-}
-
-function findParentCommentId(
-  links: string[],
-  ownId: string,
-  candidates: Set<string>,
-): string {
-  for (const link of links) {
-    const parts = link.split("?")[0].split("#")[0].split("/").filter(Boolean);
-    const ownIdx = parts.indexOf(ownId);
-    if (ownIdx <= 0) continue;
-    for (let i = ownIdx - 1; i >= 0; i--) {
-      if (candidates.has(parts[i])) return parts[i];
-    }
-  }
-  return "";
-}
-
-function parseRepliesFromPostFeed(
-  xml: string,
-  postId: string,
-  trackedComments: Map<string, UserCommentRef>,
-  username: string,
-): FoundReply[] {
-  const found: FoundReply[] = [];
-  const trackedIds = new Set(trackedComments.keys());
-  const userLower = username.toLowerCase();
-  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-  let m: RegExpExecArray | null;
-
-  while ((m = entryRe.exec(xml)) !== null) {
-    const block = m[1];
-    const replyId = getRssCommentId(block);
-    if (!replyId || trackedIds.has(replyId)) continue;
-
-    const replyAuthor = getRssAuthor(block);
-    if (!replyAuthor || replyAuthor.toLowerCase() === userLower) continue;
-
-    const links = getLinks(block);
-    const parentCommentId = findParentCommentId(links, replyId, trackedIds);
-    const parent = trackedComments.get(parentCommentId);
-    if (!parent) continue;
-
-    const replyBody = extractRssBody(getTag(block, "content"));
-    found.push({
-      replyId,
-      replyAuthor,
-      replyBody,
-      parentCommentId,
-      postId,
-      postTitle: parent.postTitle,
-      subreddit: parent.subreddit,
-      permalink:
-        links.find((l) => /\/comments\//.test(l)) ||
-        `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
-      createdUtc: getRssCreatedUtc(block),
-      isSolved: containsSolved(replyBody),
-    });
-  }
-
-  return found;
-}
-
-function parseRepliesFromPostJson(
-  json: any,
-  postId: string,
-  trackedComments: Map<string, UserCommentRef>,
-  username: string,
-): FoundReply[] {
-  const found: FoundReply[] = [];
-  const userLower = username.toLowerCase();
-
-  function walk(nodes: any[]) {
-    for (const node of nodes || []) {
-      if (node?.kind !== "t1") continue;
-      const c = node.data || {};
-      const replyId = String(c.id || "");
-      const parentCommentId = String(c.parent_id || "").replace(/^t1_/, "");
-      const parent = trackedComments.get(parentCommentId);
-      const replyAuthor = String(c.author || "");
-
-      if (
-        replyId &&
-        parent &&
-        replyAuthor &&
-        replyAuthor.toLowerCase() !== userLower
-      ) {
-        const replyBody = String(c.body || "").trim();
-        found.push({
-          replyId,
-          replyAuthor,
-          replyBody,
-          parentCommentId,
-          postId,
-          postTitle: parent.postTitle,
-          subreddit: parent.subreddit,
-          permalink: c.permalink
-            ? `https://www.reddit.com${c.permalink}`
-            : `https://www.reddit.com/comments/${postId}/_/${replyId}/`,
-          createdUtc:
-            typeof c.created_utc === "number"
-              ? c.created_utc
-              : Math.floor(Date.now() / 1000),
-          isSolved: containsSolved(replyBody),
-        });
-      }
-
-      if (c.replies?.data?.children) walk(c.replies.data.children);
-    }
-  }
-
-  walk(json?.[1]?.data?.children || []);
-  return found;
-}
-
-async function redditProxyFetchFirstText(
-  env: Env,
-  urls: string[],
-): Promise<string | null> {
-  for (const url of urls) {
-    const res = await redditProxyFetch(env, url);
-    if (res.ok) return res.text();
-    console.error(`reddit rss fetch failed ${res.status}: ${url}`);
-    if (res.status === 429) return null;
-  }
-  return null;
-}
-
-async function redditProxyFetchFirstJson(
-  env: Env,
-  urls: string[],
-): Promise<any | null> {
-  for (const url of urls) {
-    const res = await redditProxyFetch(env, url);
-    if (res.ok) return res.json();
-    console.error(`reddit json fetch failed ${res.status}: ${url}`);
-    if (res.status === 429) return null;
-  }
-  return null;
-}
-
-async function checkReplies(env: Env) {
-  try {
-    const username =
-      (await env.KV.get(KEY_USERNAME)) || DEFAULT_USERNAME;
-
-    const userXml = await redditProxyFetchFirstText(env, [
-      `https://www.reddit.com/user/${username}/comments/.rss?sort=new&limit=50`,
-      `https://www.reddit.com/user/${username}/comments.rss?sort=new&limit=50`,
-      `https://old.reddit.com/user/${username}/comments/.rss?sort=new&limit=50`,
-      `https://old.reddit.com/user/${username}/comments.rss?sort=new&limit=50`,
-    ]);
-    if (!userXml) return;
-    const userComments = parseUserCommentRefs(userXml);
-
-    const cutoff = Date.now() / 1000 - REPLY_LOOKBACK_SECONDS;
-
-    // Group by post; only keep posts in monitored subs + recent enough
-    interface PostInfo {
-      commentIds: Set<string>;
-      subreddit: string;
-      postTitle: string;
-      latestUtc: number;
-    }
-    const byPost = new Map<string, PostInfo>();
-    for (const c of userComments) {
-      const postId = c.postId;
-      if (!postId) continue;
-      const sub = c.subreddit.toLowerCase();
-      if (!ALLOWED_SUBS_LOWER.has(sub)) continue;
-      if (!INCLUDED_REPLY_SUBS.has(sub)) continue;
-      if (!c.createdUtc || c.createdUtc < cutoff) continue;
-
-      let entry = byPost.get(postId);
-      if (!entry) {
-        entry = {
-          commentIds: new Set<string>(),
-          subreddit: c.subreddit,
-          postTitle: c.postTitle,
-          latestUtc: c.createdUtc,
-        };
-        byPost.set(postId, entry);
-      }
-      entry.commentIds.add(c.id);
-      if (c.createdUtc > entry.latestUtc) entry.latestUtc = c.createdUtc;
-    }
-
-    if (byPost.size === 0) return;
-    console.log(`checkReplies: tracking ${byPost.size} PhotoshopRequest post(s)`);
-
-    // Most-recently-commented posts first, capped
-    const sortedPosts = [...byPost.entries()]
-      .sort(([, a], [, b]) => b.latestUtc - a.latestUtc)
-      .slice(0, REPLY_MAX_POSTS);
-
-    const seenIds = await getSeenReplyIds(env);
-    const isFirstRun = seenIds.size === 0;
-
-    const allReplies: FoundReply[] = [];
-
-    for (let i = 0; i < sortedPosts.length; i++) {
-      const [postId, info] = sortedPosts[i];
-      try {
-        const tracked = new Map<string, UserCommentRef>();
-        for (const commentId of info.commentIds) {
-          tracked.set(commentId, {
-            id: commentId,
-            postId,
-            subreddit: info.subreddit,
-            postTitle: info.postTitle,
-            createdUtc: info.latestUtc,
-          });
-        }
-
-        const postJson = await redditProxyFetchFirstJson(env, [
-          `https://www.reddit.com/comments/${postId}.json?raw_json=1&limit=200`,
-          `https://old.reddit.com/comments/${postId}.json?raw_json=1&limit=200`,
-        ]);
-        let collected = postJson
-          ? parseRepliesFromPostJson(postJson, postId, tracked, username)
-          : [];
-
-        if (collected.length === 0) {
-          const postXml = await redditProxyFetchFirstText(env, [
-            `https://www.reddit.com/comments/${postId}/.rss?limit=100`,
-            `https://www.reddit.com/comments/${postId}.rss?limit=100`,
-            `https://old.reddit.com/comments/${postId}/.rss?limit=100`,
-            `https://old.reddit.com/comments/${postId}.rss?limit=100`,
-          ]);
-          collected = postXml
-            ? parseRepliesFromPostFeed(postXml, postId, tracked, username)
-            : [];
-        }
-
-        allReplies.push(...collected);
-      } catch (err) {
-        console.error(`checkReplies: post ${postId} error:`, err);
-      }
-
-      // Small gap between requests to be polite
-      if (i < sortedPosts.length - 1) {
-        await new Promise((r) => setTimeout(r, REPLY_REQUEST_GAP_MS));
-      }
-    }
-
-    const freshReplies = allReplies.filter((r) => !seenIds.has(r.replyId));
-    console.log(
-      `checkReplies: observed ${allReplies.length} reply/replies, fresh ${freshReplies.length}`,
-    );
-
-    // Persist all observed reply IDs (even non-fresh) so the set drifts forward
-    if (allReplies.length > 0 && (freshReplies.length > 0 || isFirstRun)) {
-      for (const r of allReplies) seenIds.add(r.replyId);
-      await saveSeenReplyIds(env, seenIds);
-    }
-
-    if (isFirstRun) {
-      const graceCutoff =
-        Date.now() / 1000 - FIRST_RUN_SOLVED_GRACE_SECONDS;
-      const firstRunSolvedReplies = allReplies.filter(
-        (r) => r.isSolved && r.createdUtc >= graceCutoff,
-      );
-      if (firstRunSolvedReplies.length > 0) {
-        await notifyReplies(env, firstRunSolvedReplies);
-      }
-      console.log(
-        `checkReplies first run: baselined ${allReplies.length} replies for u/${username}`,
-      );
-      return;
-    }
-
-    if (freshReplies.length === 0) return;
-
-    await notifyReplies(env, freshReplies);
-
-    console.log(
-      `checkReplies: notified ${freshReplies.length} new replies for u/${username}`,
-    );
-  } catch (err) {
-    console.error("checkReplies error:", err);
-  }
-}
-
-async function notifyReplies(env: Env, replies: FoundReply[]) {
-    const subs = await getPushSubscriptions(env);
-    if (subs.length === 0) {
-      console.log(
-        `checkReplies: ${replies.length} new replies but no subscribers`,
-      );
-      return;
-    }
-
-    // Sort oldest first so notifications arrive in chronological order
-    replies.sort((a, b) => a.createdUtc - b.createdUtc);
-
-    for (const reply of replies) {
-      const bodyPreview =
-        (reply.replyBody || "").trim() ||
-        reply.postTitle ||
-        "New reply to your comment";
-      if (reply.isSolved) {
-        await sendPushToAll(subs, env, {
-          title: "✅ SOLVED EDIT!",
-          body: `u/${reply.replyAuthor}: ${bodyPreview}`.slice(0, 180),
-          tag: `fixtral-solved-${reply.replyId}`,
-          url: "/app",
-          type: "solved",
-          vibrate: [500, 200, 500, 200, 500],
-          requireInteraction: true,
-          postId: reply.postId,
-          replyId: reply.replyId,
-        });
-        continue;
-      }
-      await sendPushToAll(subs, env, {
-        title: `💬 u/${reply.replyAuthor} replied in r/${reply.subreddit}`,
-        body: bodyPreview.slice(0, 180),
-        tag: `fixtral-reply-${reply.replyId}`,
-        url: "/app",
-        type: "reply",
-        vibrate: [400, 200, 400, 200, 400],
-        requireInteraction: true,
-        postId: reply.postId,
-        replyId: reply.replyId,
-      });
-    }
 }
 
 // ─── Web Push (RFC 8291) implementation for Cloudflare Workers ───────

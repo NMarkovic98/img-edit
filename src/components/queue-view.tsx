@@ -888,7 +888,7 @@ export function QueueView() {
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      fetchPosts(true); // silent refresh
+      fetchPosts(true);
     }, 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchPosts]);

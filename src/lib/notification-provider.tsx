@@ -601,14 +601,13 @@ export function NotificationProvider({
     }
   }, []);
 
-  // ─── Start polling on mount ──────────────────────────────────────
+  // ─── Polling only runs when isMonitoring is on ────────────────────
 
   useEffect(() => {
-    // Initial checks
+    if (!isMonitoring) return;
     checkNewPosts();
     checkReplies();
 
-    // Set up intervals
     const postInterval = setInterval(checkNewPosts, FETCH_INTERVAL);
     const replyInterval = setInterval(checkReplies, REPLY_CHECK_INTERVAL);
 
@@ -616,7 +615,7 @@ export function NotificationProvider({
       clearInterval(postInterval);
       clearInterval(replyInterval);
     };
-  }, [checkNewPosts, checkReplies]);
+  }, [isMonitoring, checkNewPosts, checkReplies]);
 
   return (
     <PushContext.Provider

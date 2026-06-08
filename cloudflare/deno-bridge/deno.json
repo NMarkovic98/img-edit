@@ -1,0 +1,15 @@
+{
+  "unstable": ["kv", "cron"],
+  "tasks": {
+    "dev": "deno run --unstable-kv --unstable-cron --allow-net --allow-env --allow-read --watch main.ts",
+    "start": "deno run --unstable-kv --unstable-cron --allow-net --allow-env main.ts"
+  },
+  "imports": {
+    "@std/encoding/": "jsr:/@std/encoding@1/"
+  },
+  "deploy": {
+    "org": "deandean91",
+    "app": "fixtral-reddit-bridge"
+  }
+}
+

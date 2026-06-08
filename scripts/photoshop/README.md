@@ -11,16 +11,26 @@ Recommended action order:
 
 The active document name must be `Subreddit_postId`, which the queue Photoshop import already sets from the Reddit post.
 
-Example output:
+The script exports PNG first. If that PNG is larger than 20MB, it deletes the
+PNG and exports JPEG instead so the upload stays under the receiving script's
+size limit.
+
+Example output when PNG is small enough:
 
 ```text
 /Users/nikolamarkovic/Desktop/private/photo-edit/PSR Exports/PhotoshopRequest_1tpfqz3.png
 ```
 
+Example fallback output when PNG is over 20MB:
+
+```text
+/Users/nikolamarkovic/Desktop/private/photo-edit/PSR Exports/PhotoshopRequest_1tpfqz3.jpg
+```
+
 Remote upload:
 
 ```text
-nmarkovic@192.168.0.26:~/reddit_drops/PhotoshopRequest_1tpfqz3.png
+nmarkovic@192.168.0.26:~/reddit_drops/PhotoshopRequest_1tpfqz3.{png|jpg}
 ```
 
 ## Using Vercel with local Photoshop

@@ -14,7 +14,6 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
 const API_BASE = "https://oauth.reddit.com";
 
-// Route requests through Cloudflare Worker proxy when configured (avoids Vercel IP blocks)
 async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
   const proxyUrl = process.env.CLOUDFLARE_PROXY_URL;
   const proxySecret = process.env.CLOUDFLARE_PROXY_SECRET;
@@ -23,11 +22,128 @@ async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
     const target = `${proxyUrl}?url=${encodeURIComponent(url)}`;
     const headers = new Headers(init?.headers);
     headers.set("X-Proxy-Secret", proxySecret);
-    console.log(`Proxying via Cloudflare: ${url.substring(0, 80)}...`);
     return fetch(target, { ...init, headers });
   }
 
   return fetch(url, init);
+}
+
+// Reddit blocks .json from many IPs but still serves .rss. These helpers parse the
+// Atom feed into Listing-shaped `data` objects so the rest of the pipeline is unchanged.
+const RSS_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  Accept: "application/atom+xml,application/xml,text/xml,*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+function decodeEntities(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#032;|&#32;/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
+function stripHtml(rawContent: string) {
+  let html = decodeEntities(rawContent)
+    .replace(/<!--\s*SC_OFF\s*-->/gi, "")
+    .replace(/<!--\s*SC_ON\s*-->/gi, "");
+  const submittedIdx = html.search(/submitted\s+by/i);
+  if (submittedIdx > 0) html = html.slice(0, submittedIdx);
+  html = html.replace(/<\/p>/gi, "\n").replace(/<br\s*\/?>/gi, "\n");
+  html = html.replace(/<[^>]+>/g, "");
+  return decodeEntities(html).replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function rssTag(block: string, name: string) {
+  const match = new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i").exec(block);
+  return decodeEntities(match?.[1]?.trim() || "");
+}
+
+function rssAttr(block: string, tagName: string, attrName: string) {
+  const match = new RegExp(`<${tagName}[^>]*${attrName}="([^"]+)"[^>]*>`, "i").exec(block);
+  return decodeEntities(match?.[1] || "");
+}
+
+function parseSubredditRss(xml: string, fallbackSubreddit: string): any[] {
+  const out: any[] = [];
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = entryRe.exec(xml)) !== null) {
+    const block = match[1];
+    const id = rssTag(block, "id").replace(/^t3_/, "");
+    const title = rssTag(block, "title");
+    const authorBlock = /<author[^>]*>([\s\S]*?)<\/author>/i.exec(block)?.[1] || "";
+    const author = rssTag(authorBlock, "name").replace(/^\/?u\//i, "") || "unknown";
+    const subreddit = rssAttr(block, "category", "term") || fallbackSubreddit;
+    const permalink = rssAttr(block, "link", "href");
+    const rawContent = rssTag(block, "content");
+    const contentHtml = decodeEntities(rawContent);
+    const published = rssTag(block, "published") || rssTag(block, "updated");
+    const thumbnail = rssAttr(block, "media:thumbnail", "url");
+    const hrefs = Array.from(contentHtml.matchAll(/href="([^"]+)"/gi)).map((x) =>
+      decodeEntities(x[1]),
+    );
+    const directImage = hrefs.find((href) =>
+      /(?:i|preview)\.redd\.it|i\.imgur\.com/i.test(href),
+    );
+    const url = directImage || thumbnail || "";
+
+    if (!id || !title || !permalink) continue;
+
+    const data: any = {
+      id,
+      title,
+      selftext: stripHtml(rawContent) || title,
+      url,
+      author,
+      created_utc: published
+        ? Math.floor(new Date(published).getTime() / 1000)
+        : Math.floor(Date.now() / 1000),
+      permalink: new URL(permalink).pathname,
+      score: 0,
+      num_comments: 0,
+      subreddit,
+      thumbnail,
+      upvote_ratio: null,
+      link_flair_text: null,
+    };
+
+    if (url) {
+      data.preview = { images: [{ source: { url } }] };
+    }
+
+    out.push(data);
+  }
+
+  return out;
+}
+
+async function fetchRssChildren(subPath: string, limit = 50): Promise<any[]> {
+  // subPath may be a single sub ("PhotoshopRequest") or multi ("photoshoprequest+editmyphoto")
+  const urls = [
+    `https://old.reddit.com/r/${subPath}/new/.rss?limit=${limit}`,
+    `https://www.reddit.com/r/${subPath}/new/.rss?limit=${limit}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers: RSS_HEADERS, cache: "no-store" });
+      if (!res.ok) continue;
+      const xml = await res.text();
+      const parsed = parseSubredditRss(xml, subPath.split("+")[0]);
+      if (parsed.length > 0) return parsed;
+    } catch (err) {
+      console.error(`RSS fetch error for ${subPath}:`, err);
+    }
+  }
+  return [];
 }
 
 async function getAccessToken() {
@@ -184,8 +300,8 @@ async function fetchSubredditPosts(sub: string, isOAuth: boolean, token?: string
         },
       );
       if (!res.ok) {
-        console.error(`Reddit public API error for r/${sub}: ${res.status}`);
-        return [];
+        console.warn(`Reddit JSON ${res.status} for r/${sub} — falling back to RSS`);
+        return await fetchRssChildren(sub);
       }
       const data = await res.json();
       return data.data.children.map((child: any) => child.data);
@@ -246,13 +362,19 @@ async function fetchPostsViaAPI(
             cache: "no-store",
           }).then(async (res) => {
             if (res.status === 429) {
-              console.warn(`Rate limited on main fetch`);
-              return [];
+              console.warn(`Rate limited on main fetch — falling back to RSS`);
+              return await fetchRssChildren(mainMulti);
             }
-            if (!res.ok) return [];
+            if (!res.ok) {
+              console.warn(`Main JSON ${res.status} — falling back to RSS`);
+              return await fetchRssChildren(mainMulti);
+            }
             const data = await res.json();
             return data.data.children.map((c: any) => c.data);
-          }).catch(() => [])
+          }).catch(async (err) => {
+            console.error(`Main fetch threw, falling back to RSS:`, err);
+            return await fetchRssChildren(mainMulti);
+          })
         );
       }
     }
