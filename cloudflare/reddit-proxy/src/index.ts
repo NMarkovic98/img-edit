@@ -99,10 +99,18 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string) {
     const hrefs = Array.from(contentHtml.matchAll(/href="([^"]+)"/gi)).map((x) =>
       decodeEntities(x[1]),
     );
-    const directImage = hrefs.find((href) =>
+    const imageHrefs = hrefs.filter((href) =>
       /(?:i|preview)\.redd\.it|i\.imgur\.com/i.test(href),
     );
-    const url = directImage || thumbnail || "";
+    // Normalize preview.redd.it → i.redd.it (originals, not recompressed)
+    const normalized = imageHrefs.map((href) => {
+      const m = href.match(
+        /preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/,
+      );
+      return m ? `https://i.redd.it/${m[1]}.${m[2]}` : href;
+    });
+    const dedupedImages = Array.from(new Set(normalized));
+    const url = dedupedImages[0] || thumbnail || "";
 
     if (!id || !title || !permalink) continue;
 
@@ -134,6 +142,33 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string) {
           },
         ],
       };
+    }
+
+    // Build media_metadata when RSS reveals multiple images so the slider triggers
+    if (dedupedImages.length > 1) {
+      const media_metadata: Record<string, any> = {};
+      const items: any[] = [];
+      for (const imgUrl of dedupedImages) {
+        const m = imgUrl.match(
+          /(?:i|preview)\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/i,
+        );
+        if (!m) continue;
+        const mediaId = m[1];
+        const ext = m[2].toLowerCase();
+        const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpg";
+        media_metadata[mediaId] = {
+          status: "valid",
+          e: "Image",
+          m: mime,
+          s: { u: `https://i.redd.it/${mediaId}.${ext}`, x: 0, y: 0 },
+        };
+        items.push({ media_id: mediaId, id: items.length + 1 });
+      }
+      if (Object.keys(media_metadata).length > 1) {
+        data.media_metadata = media_metadata;
+        data.gallery_data = { items };
+        data.is_gallery = true;
+      }
     }
 
     children.push({ kind: "t3", data });

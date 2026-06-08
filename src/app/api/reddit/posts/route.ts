@@ -91,10 +91,18 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string): any[] {
     const hrefs = Array.from(contentHtml.matchAll(/href="([^"]+)"/gi)).map((x) =>
       decodeEntities(x[1]),
     );
-    const directImage = hrefs.find((href) =>
+    const imageHrefs = hrefs.filter((href) =>
       /(?:i|preview)\.redd\.it|i\.imgur\.com/i.test(href),
     );
-    const url = directImage || thumbnail || "";
+    // Normalize preview.redd.it → i.redd.it (originals, not recompressed)
+    const normalized = imageHrefs.map((href) => {
+      const m = href.match(
+        /preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/,
+      );
+      return m ? `https://i.redd.it/${m[1]}.${m[2]}` : href;
+    });
+    const dedupedImages = Array.from(new Set(normalized));
+    const url = dedupedImages[0] || thumbnail || "";
 
     if (!id || !title || !permalink) continue;
 
@@ -118,6 +126,33 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string): any[] {
 
     if (url) {
       data.preview = { images: [{ source: { url } }] };
+    }
+
+    // Build media_metadata when RSS reveals multiple images so the slider triggers
+    if (dedupedImages.length > 1) {
+      const media_metadata: Record<string, any> = {};
+      const items: any[] = [];
+      for (const imgUrl of dedupedImages) {
+        const m = imgUrl.match(
+          /(?:i|preview)\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/i,
+        );
+        if (!m) continue;
+        const mediaId = m[1];
+        const ext = m[2].toLowerCase();
+        const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpg";
+        media_metadata[mediaId] = {
+          status: "valid",
+          e: "Image",
+          m: mime,
+          s: { u: `https://i.redd.it/${mediaId}.${ext}`, x: 0, y: 0 },
+        };
+        items.push({ media_id: mediaId, id: items.length + 1 });
+      }
+      if (Object.keys(media_metadata).length > 1) {
+        data.media_metadata = media_metadata;
+        data.gallery_data = { items };
+        data.is_gallery = true;
+      }
     }
 
     out.push(data);
@@ -470,21 +505,36 @@ function processRawPosts(allPosts: any[]) {
       let imageUrl = post.url;
       let allImages: string[] = [];
 
+      if (post.media_metadata) {
+        // Treat any post with multiple valid media_metadata entries as a gallery,
+        // even if is_gallery / is_self flags don't match (handles edge cases where
+        // Reddit returns gallery data for non-standard post types).
+        const galleryImages = extractGalleryImages(post);
+        if (
+          galleryImages.length > 1 ||
+          post.is_gallery ||
+          (post.is_self && galleryImages.length > 0)
+        ) {
+          allImages = galleryImages;
+          imageUrl = allImages[0] || post.url;
+        }
+      }
+
       if (
-        (post.is_gallery || (post.is_self && post.media_metadata)) &&
-        post.media_metadata
-      ) {
-        allImages = extractGalleryImages(post);
-        imageUrl = allImages[0] || post.url;
-      } else if (
+        allImages.length === 0 &&
         post.crosspost_parent_list &&
         post.crosspost_parent_list.length > 0
       ) {
         const originalPost = post.crosspost_parent_list[0];
-        if (originalPost.is_gallery && originalPost.media_metadata) {
-          allImages = extractGalleryImages(originalPost);
-          imageUrl = allImages[0] || originalPost.url;
-        } else if (
+        if (originalPost.media_metadata) {
+          const galleryImages = extractGalleryImages(originalPost);
+          if (galleryImages.length > 0) {
+            allImages = galleryImages;
+            imageUrl = allImages[0] || originalPost.url;
+          }
+        }
+        if (
+          allImages.length === 0 &&
           originalPost.url &&
           (originalPost.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ||
             originalPost.url.includes("i.redd.it") ||
