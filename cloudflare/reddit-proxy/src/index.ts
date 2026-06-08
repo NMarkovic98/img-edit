@@ -489,13 +489,36 @@ async function proxyReddit(target: URL) {
 
   const contentType = upstream.headers.get("content-type") || "";
   if (upstream.ok && contentType.includes("application/json")) {
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+    // Reddit sometimes returns 200 + a valid-looking Listing with empty children
+    // when silently blocking the IP. Peek at the body and fall back to RSS in
+    // that case, instead of passing the empty Listing through.
+    if (target.pathname.includes("/new.json")) {
+      const body = await upstream.text();
+      try {
+        const parsed = JSON.parse(body);
+        const children = parsed?.data?.children;
+        if (Array.isArray(children) && children.length > 0) {
+          return new Response(body, {
+            status: upstream.status,
+            headers: {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        }
+        // empty — fall through to RSS
+      } catch {
+        // not JSON — fall through to RSS
+      }
+    } else {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
   }
 
   if (target.pathname.includes("/new.json")) {

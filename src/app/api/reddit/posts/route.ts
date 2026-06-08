@@ -161,6 +161,142 @@ function parseSubredditRss(xml: string, fallbackSubreddit: string): any[] {
   return out;
 }
 
+// HTML enrichment: old.reddit.com listing exposes full gallery image IDs in
+// `data-cachedhtml` even when the RSS feed only includes the cover image.
+const HTML_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  Cookie: "over18=1; _options=%7B%22pref_quarantine_optin%22%3A%20true%7D",
+};
+
+interface GalleryItem {
+  media_id: string;
+  ext: string;
+  width: number | null;
+  height: number | null;
+}
+
+function parseGalleryFromCachedHtml(block: string): GalleryItem[] | null {
+  const cachedMatch = /data-cachedhtml="((?:[^"\\]|\\.)*)"/i.exec(block);
+  if (!cachedMatch) return null;
+  const escaped = cachedMatch[1];
+  if (!/gallery-tiles|media-gallery/i.test(escaped)) return null;
+
+  const unescaped = escaped
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+
+  const idsMatch = /data-media-ids="([^"]+)"/i.exec(unescaped);
+  if (!idsMatch) return null;
+  const mediaIds = idsMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+
+  const items: GalleryItem[] = [];
+  for (const mediaId of mediaIds) {
+    const linkRe = new RegExp(
+      `gallery-item-thumbnail-link[^>]+href="https?:\\/\\/[^"]*?\\/${mediaId}\\.([a-z]+)\\?([^"]+)"`,
+      "i",
+    );
+    const linkMatch = linkRe.exec(unescaped);
+    let ext = "jpg";
+    let width: number | null = null;
+    let height: number | null = null;
+    if (linkMatch) {
+      ext = linkMatch[1].toLowerCase();
+      const params = linkMatch[2];
+      const wm = /width=(\d+)/.exec(params);
+      if (wm) width = parseInt(wm[1], 10);
+    }
+    items.push({ media_id: mediaId, ext, width, height });
+  }
+  return items.length > 0 ? items : null;
+}
+
+function parseSubredditHtml(
+  html: string,
+): Map<string, { is_gallery: boolean; gallery: GalleryItem[] | null }> {
+  const enrichments = new Map<
+    string,
+    { is_gallery: boolean; gallery: GalleryItem[] | null }
+  >();
+  const thingRe =
+    /<div[^>]+id="thing_t3_([a-z0-9]+)"[^>]*>([\s\S]{0,20000}?)(?=<div[^>]+id="thing_t3_|<!-- END LISTING -->|<\/div>\s*<div[^>]+class="footer)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = thingRe.exec(html)) !== null) {
+    const id = m[1];
+    const opening = m[0].slice(0, 1500);
+    const body = m[2];
+    const isGalleryAttr = / data-is-gallery="([^"]*)"/i.exec(opening);
+    const is_gallery = isGalleryAttr ? isGalleryAttr[1] === "true" : false;
+    const gallery = parseGalleryFromCachedHtml(body);
+    enrichments.set(id, { is_gallery: is_gallery || !!gallery, gallery });
+  }
+  return enrichments;
+}
+
+async function fetchSubredditHtml(
+  sub: string,
+  limit: number,
+): Promise<Map<string, { is_gallery: boolean; gallery: GalleryItem[] | null }>> {
+  try {
+    const url = `https://old.reddit.com/r/${sub}/new/?limit=${limit}`;
+    const res = await fetch(url, { headers: HTML_HEADERS, cache: "no-store" });
+    if (!res.ok) return new Map();
+    return parseSubredditHtml(await res.text());
+  } catch {
+    return new Map();
+  }
+}
+
+function applyHtmlEnrichment(
+  children: any[],
+  enrichments: Map<
+    string,
+    { is_gallery: boolean; gallery: GalleryItem[] | null }
+  >,
+) {
+  for (const child of children) {
+    const e = enrichments.get(child.id);
+    if (!e) continue;
+    if (e.is_gallery) child.is_gallery = true;
+    if (e.gallery && e.gallery.length > 0) {
+      const media_metadata: Record<string, any> = {};
+      for (const item of e.gallery) {
+        const ext =
+          item.ext === "png" ? "png" : item.ext === "gif" ? "gif" : "jpg";
+        const mime =
+          ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpg";
+        media_metadata[item.media_id] = {
+          status: "valid",
+          e: "Image",
+          m: mime,
+          s: {
+            u: `https://i.redd.it/${item.media_id}.${ext}`,
+            x: item.width || 0,
+            y: item.height || 0,
+          },
+        };
+      }
+      child.media_metadata = media_metadata;
+      child.gallery_data = {
+        items: e.gallery.map((item, idx) => ({
+          media_id: item.media_id,
+          id: idx + 1,
+        })),
+      };
+      const first = e.gallery[0];
+      const firstExt =
+        first.ext === "png" ? "png" : first.ext === "gif" ? "gif" : "jpg";
+      child.url = `https://i.redd.it/${first.media_id}.${firstExt}`;
+    }
+  }
+}
+
 async function fetchRssChildren(subPath: string, limit = 50): Promise<any[]> {
   // subPath may be a single sub ("PhotoshopRequest") or multi ("photoshoprequest+editmyphoto")
   const urls = [
@@ -173,7 +309,20 @@ async function fetchRssChildren(subPath: string, limit = 50): Promise<any[]> {
       if (!res.ok) continue;
       const xml = await res.text();
       const parsed = parseSubredditRss(xml, subPath.split("+")[0]);
-      if (parsed.length > 0) return parsed;
+      if (parsed.length > 0) {
+        // Enrich with HTML gallery data per sub (subPath may be multi: "a+b")
+        const subs = subPath.split("+").filter(Boolean);
+        const htmlMaps = await Promise.all(
+          subs.map((s) => fetchSubredditHtml(s, limit)),
+        );
+        const merged = new Map<
+          string,
+          { is_gallery: boolean; gallery: GalleryItem[] | null }
+        >();
+        for (const map of htmlMaps) for (const [k, v] of map) merged.set(k, v);
+        applyHtmlEnrichment(parsed, merged);
+        return parsed;
+      }
     } catch (err) {
       console.error(`RSS fetch error for ${subPath}:`, err);
     }
@@ -628,6 +777,18 @@ function processRawPosts(allPosts: any[]) {
         isPaid,
         aiPolicy,
         imageDimensions: getKnownDimensions(post),
+        _debug: {
+          is_gallery: !!post.is_gallery,
+          is_self: !!post.is_self,
+          media_metadata_count: post.media_metadata
+            ? Object.keys(post.media_metadata).length
+            : 0,
+          has_gallery_data: !!post.gallery_data,
+          has_crosspost: !!(
+            post.crosspost_parent_list &&
+            post.crosspost_parent_list.length > 0
+          ),
+        },
       };
     });
 }
