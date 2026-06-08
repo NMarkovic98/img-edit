@@ -80,6 +80,13 @@ interface RedditPost {
   flair?: string | null;
   isPaid?: boolean;
   aiPolicy?: "ai_ok" | "no_ai" | "unknown";
+  _debug?: {
+    is_gallery: boolean;
+    is_self: boolean;
+    media_metadata_count: number;
+    has_gallery_data: boolean;
+    has_crosspost: boolean;
+  };
 }
 
 interface AnalysisResult {
@@ -1321,6 +1328,16 @@ export function QueueView() {
                   </CardHeader>
 
                   <CardContent className="space-y-2 sm:space-y-4 px-3 sm:px-6 pb-3 sm:pb-6">
+                    {post._debug && (
+                      <div className="text-[10px] font-mono bg-yellow-100 dark:bg-yellow-900/30 text-yellow-900 dark:text-yellow-200 px-2 py-1 rounded">
+                        id={post.id} imgs={post.allImages?.length ?? 0} gal=
+                        {String(post._debug.is_gallery)} self=
+                        {String(post._debug.is_self)} mm=
+                        {post._debug.media_metadata_count} gd=
+                        {String(post._debug.has_gallery_data)} xp=
+                        {String(post._debug.has_crosspost)}
+                      </div>
+                    )}
                     {post.allImages && post.allImages.length > 1 ? (
                       <ImageSlider
                         images={post.allImages}
