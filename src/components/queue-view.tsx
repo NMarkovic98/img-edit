@@ -70,6 +70,7 @@ interface RedditPost {
   allImages: string[];
   isGallery: boolean;
   imageCount: number;
+  galleryPreviewOnly?: boolean;
   postUrl: string;
   created_utc: number;
   created_date: string;
@@ -80,13 +81,6 @@ interface RedditPost {
   flair?: string | null;
   isPaid?: boolean;
   aiPolicy?: "ai_ok" | "no_ai" | "unknown";
-  _debug?: {
-    is_gallery: boolean;
-    is_self: boolean;
-    media_metadata_count: number;
-    has_gallery_data: boolean;
-    has_crosspost: boolean;
-  };
 }
 
 interface AnalysisResult {
@@ -398,10 +392,9 @@ export function QueueView() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
     null,
   );
-  const [selectedSubreddits, setSelectedSubreddits] = useState<string[]>(
-    AVAILABLE_SUBREDDITS.map((s) => s.id), // All selected by default
-  );
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [selectedSubreddits, setSelectedSubreddits] = useState<string[]>([
+    "PhotoshopRequest",
+  ]);
   const [newPostIds, setNewPostIds] = useState<Set<string>>(new Set());
   const [newPostCount, setNewPostCount] = useState(0);
   const [filterPaid, setFilterPaid] = useState<"all" | "paid" | "free">("all");
@@ -527,8 +520,8 @@ export function QueueView() {
           return updated;
         });
         setNewPostCount((prev) => prev + ids.length);
-        // Also refresh the post list
-        fetchPosts(true);
+        // Note: do NOT auto-refresh the queue here — ScrapeBadger calls cost
+        // credits. The badge is enough; user hits the refresh button when ready.
       }
     };
     const onCommentedPosts = (e: Event) => {
@@ -560,10 +553,10 @@ export function QueueView() {
     async (silent = false, noCache = false) => {
       if (!silent) setLoading(true);
       try {
-        const subredditsParam = selectedSubreddits.join(",");
+        const subredditsParam = encodeURIComponent(selectedSubreddits.join(","));
         const cacheBust = noCache ? "&noCache=1" : "";
         const response = await authedFetch(
-          `/api/reddit/posts?subreddits=${subredditsParam}${cacheBust}`,
+          `/api/reddit/posts?subreddits=${subredditsParam}&source=scrapebadger${cacheBust}`,
         );
         const data = await response.json();
 
@@ -886,19 +879,9 @@ export function QueueView() {
     }
   };
 
-  // Fetch on mount and when subreddits change
-  useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
-
-  // Auto-refresh every 10 seconds
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchPosts(true);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchPosts]);
+  // No mount/auto fetch: ScrapeBadger calls cost credits, so posts are only
+  // fetched when the user clicks the Refresh button. Push notifications (via
+  // the free Cloudflare proxy) tell the user when new posts are available.
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
@@ -1129,15 +1112,6 @@ export function QueueView() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Button
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              variant={autoRefresh ? "default" : "outline"}
-              size="sm"
-              className={`h-8 px-2.5 text-xs ${autoRefresh ? "bg-green-600 hover:bg-green-700" : ""}`}
-            >
-              <Clock className="mr-1 h-3 w-3" />
-              {autoRefresh ? "Auto" : "Auto"}
-            </Button>
-            <Button
               onClick={() => fetchPosts(false, true)}
               disabled={loading}
               size="sm"
@@ -1328,16 +1302,6 @@ export function QueueView() {
                   </CardHeader>
 
                   <CardContent className="space-y-2 sm:space-y-4 px-3 sm:px-6 pb-3 sm:pb-6">
-                    {post._debug && (
-                      <div className="text-[10px] font-mono bg-yellow-100 dark:bg-yellow-900/30 text-yellow-900 dark:text-yellow-200 px-2 py-1 rounded">
-                        id={post.id} imgs={post.allImages?.length ?? 0} gal=
-                        {String(post._debug.is_gallery)} self=
-                        {String(post._debug.is_self)} mm=
-                        {post._debug.media_metadata_count} gd=
-                        {String(post._debug.has_gallery_data)} xp=
-                        {String(post._debug.has_crosspost)}
-                      </div>
-                    )}
                     {post.allImages && post.allImages.length > 1 ? (
                       <ImageSlider
                         images={post.allImages}
@@ -1379,6 +1343,11 @@ export function QueueView() {
                             }))
                           }
                         />
+                        {post.galleryPreviewOnly && (
+                          <div className="absolute left-2 top-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
+                            Gallery preview only
+                          </div>
+                        )}
                       </div>
                     ) : null}
 

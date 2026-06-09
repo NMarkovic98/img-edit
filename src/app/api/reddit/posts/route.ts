@@ -451,6 +451,100 @@ Focus ONLY on technical editing requirements - remove/add objects, color changes
   };
 }
 
+// ─── ScrapeBadger (paid) ─────────────────────────────────────────────────
+// Used by manual queue refresh in production where Reddit blocks Vercel's IPs.
+// The subreddit listing endpoint can omit full gallery metadata, so gallery
+// posts are enriched from old.reddit HTML when possible.
+const SCRAPEBADGER_BASE = "https://scrapebadger.com/v1";
+
+async function fetchSubredditViaScrapeBadger(sub: string): Promise<any[]> {
+  const apiKey = process.env.SCRAPEBADGER_API_KEY;
+  if (!apiKey) {
+    throw new Error("SCRAPEBADGER_API_KEY is not set");
+  }
+
+  const url = `${SCRAPEBADGER_BASE}/reddit/subreddits/${encodeURIComponent(
+    sub,
+  )}/posts?sort=new&limit=100`;
+
+  const res = await fetch(url, {
+    headers: {
+      "x-api-key": apiKey,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`ScrapeBadger ${res.status}: ${text.slice(0, 500)}`);
+  }
+
+  const body = await res.json();
+
+  let posts: any[] = [];
+
+  // Be defensive about shape — try the common Reddit Listing shape first,
+  // then a flat array, then a couple of common wrapper keys.
+  if (body?.data?.children && Array.isArray(body.data.children)) {
+    posts = body.data.children.map((c: any) => c.data || c);
+  } else if (Array.isArray(body)) {
+    posts = body;
+  } else if (Array.isArray(body?.posts)) {
+    posts = body.posts;
+  } else if (Array.isArray(body?.data)) {
+    posts = body.data;
+  } else if (Array.isArray(body?.results)) {
+    posts = body.results;
+  } else {
+    console.warn(
+      "ScrapeBadger: unrecognized response shape, keys =",
+      body && typeof body === "object" ? Object.keys(body) : typeof body,
+    );
+    return [];
+  }
+
+  if (posts.some((post) => post?.is_gallery)) {
+    const enrichments = await fetchSubredditHtml(sub, 100);
+    applyHtmlEnrichment(posts, enrichments);
+  }
+
+  return posts;
+}
+
+async function fetchPostsViaScrapeBadger(
+  subreddits: string[],
+): Promise<{ posts: any[]; rateLimited: boolean; resetAfter?: number }> {
+  if (!process.env.SCRAPEBADGER_API_KEY) {
+    throw new Error("SCRAPEBADGER_API_KEY is not set");
+  }
+
+  const filtered = subreddits.filter((s) => !EXCLUDED_SUBS.has(s.toLowerCase()));
+
+  const results = await Promise.all(
+    filtered.map((sub) =>
+      fetchSubredditViaScrapeBadger(sub).catch((err) => {
+        console.error(`ScrapeBadger r/${sub} error:`, err?.message || err);
+        return [] as any[];
+      }),
+    ),
+  );
+
+  const allPosts = results.flat();
+  const seen = new Set<string>();
+  const deduped = allPosts.filter((p) => {
+    if (!p?.id) return false;
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+
+  console.log(
+    `ScrapeBadger fetched ${deduped.length} posts across ${filtered.length} subs`,
+  );
+  return { posts: processRawPosts(deduped), rateLimited: false };
+}
+
 // Last successful response — used ONLY as fallback when rate-limited or erroring
 let lastPosts: any[] = [];
 
@@ -602,12 +696,91 @@ function processRawPosts(allPosts: any[]) {
     return `https://i.redd.it/${mediaId}.${ext}`;
   }
 
+  function getExtFromValue(value: unknown): string {
+    if (typeof value !== "string") return "jpg";
+    const lower = value.toLowerCase();
+    if (lower.includes("png")) return "png";
+    if (lower.includes("gif")) return "gif";
+    if (lower.includes("webp")) return "webp";
+    if (lower.includes("jpeg")) return "jpeg";
+    return "jpg";
+  }
+
+  function getGalleryItems(post: any): any[] {
+    if (Array.isArray(post.gallery_data)) return post.gallery_data;
+    if (Array.isArray(post.gallery_data?.items)) return post.gallery_data.items;
+    if (Array.isArray(post.gallery_items)) return post.gallery_items;
+    if (Array.isArray(post.media)) return post.media;
+    return [];
+  }
+
+  function normalizePreviewUrl(value: unknown): string {
+    if (typeof value !== "string") return "";
+    const url = value.replace(/&amp;/g, "&");
+    const previewMatch = url.match(
+      /preview\.redd\.it\/([a-zA-Z0-9]+)\.(jpg|jpeg|png|gif|webp)/i,
+    );
+    if (previewMatch) {
+      return `https://i.redd.it/${previewMatch[1]}.${previewMatch[2]}`;
+    }
+    return url;
+  }
+
+  function isUsableImageUrl(value: unknown): value is string {
+    if (typeof value !== "string" || value.length === 0) return false;
+    if (/^(?:default|self|nsfw|spoiler)$/i.test(value)) return false;
+    return (
+      /\.(jpg|jpeg|png|gif|webp)(?:[?#].*)?$/i.test(value) ||
+      /(?:i|preview)\.redd\.it\//i.test(value) ||
+      /(?:^|\/\/)i\.imgur\.com\//i.test(value)
+    );
+  }
+
+  function getFallbackImageUrl(post: any): string {
+    const previewImages = extractPreviewImages(post);
+    if (previewImages.length > 0) return previewImages[0];
+    const normalizedUrl = normalizePreviewUrl(post.url);
+    if (isUsableImageUrl(normalizedUrl)) return normalizedUrl;
+    const normalizedThumbnail = normalizePreviewUrl(post.thumbnail);
+    if (isUsableImageUrl(normalizedThumbnail)) return normalizedThumbnail;
+    return "";
+  }
+
   function extractGalleryImages(post: any): string[] {
     const images: string[] = [];
+    const galleryItems = getGalleryItems(post);
+
+    if (galleryItems.length > 0) {
+      for (const item of galleryItems) {
+        const url =
+          item?.url ||
+          item?.image_url ||
+          item?.media_url ||
+          item?.source?.url ||
+          item?.s?.u;
+        const normalized = normalizePreviewUrl(url);
+        if (isUsableImageUrl(normalized)) {
+          images.push(normalized);
+          continue;
+        }
+
+        const mediaId = item?.media_id || item?.mediaId || item?.id;
+        if (
+          typeof mediaId === "string" &&
+          /^[a-z0-9]+$/i.test(mediaId) &&
+          mediaId.length >= 6
+        ) {
+          const ext = getExtFromValue(item?.m || item?.mime || item?.ext || url);
+          images.push(`https://i.redd.it/${mediaId}.${ext}`);
+        }
+      }
+      if (images.length > 0) return Array.from(new Set(images));
+    }
+
     if (!post.media_metadata) return images;
 
-    const orderedIds = post.gallery_data?.items
-      ? post.gallery_data.items.map((item: any) => item.media_id)
+    const orderedIds = galleryItems.length > 0
+      ? galleryItems.map((item: any) => item.media_id || item.mediaId || item.id)
       : Object.keys(post.media_metadata);
 
     for (const mediaId of orderedIds) {
@@ -617,6 +790,25 @@ function processRawPosts(allPosts: any[]) {
       }
     }
     return images;
+  }
+
+  function extractPreviewImages(post: any): string[] {
+    if (!Array.isArray(post.preview_images)) return [];
+
+    const images = post.preview_images
+      .map((image: any) => {
+        const resolutions = Array.isArray(image?.resolutions)
+          ? image.resolutions
+          : [];
+        return normalizePreviewUrl(
+          image?.url ||
+            image?.source?.url ||
+            resolutions[resolutions.length - 1]?.url,
+        );
+      })
+      .filter((url: string) => isUsableImageUrl(url));
+
+    return Array.from(new Set(images));
   }
 
   // Extract known dimensions from Reddit metadata (no extra fetches)
@@ -631,6 +823,10 @@ function processRawPosts(allPosts: any[]) {
     // Regular post with preview
     if (post.preview?.images?.[0]?.source) {
       const src = post.preview.images[0].source;
+      if (src.width && src.height) return { w: src.width, h: src.height };
+    }
+    if (Array.isArray(post.preview_images) && post.preview_images[0]) {
+      const src = post.preview_images[0];
       if (src.width && src.height) return { w: src.width, h: src.height };
     }
     // Crosspost
@@ -651,7 +847,7 @@ function processRawPosts(allPosts: any[]) {
   return posts
     .filter((post: any) => post.created_utc > twoHoursAgo)
     .map((post: any) => {
-      let imageUrl = post.url;
+      let imageUrl = getFallbackImageUrl(post);
       let allImages: string[] = [];
 
       if (post.media_metadata) {
@@ -665,7 +861,15 @@ function processRawPosts(allPosts: any[]) {
           (post.is_self && galleryImages.length > 0)
         ) {
           allImages = galleryImages;
-          imageUrl = allImages[0] || post.url;
+          imageUrl = allImages[0] || imageUrl;
+        }
+      }
+
+      if (allImages.length === 0) {
+        const previewImages = extractPreviewImages(post);
+        if (previewImages.length > 0) {
+          allImages = previewImages;
+          imageUrl = allImages[0];
         }
       }
 
@@ -679,7 +883,7 @@ function processRawPosts(allPosts: any[]) {
           const galleryImages = extractGalleryImages(originalPost);
           if (galleryImages.length > 0) {
             allImages = galleryImages;
-            imageUrl = allImages[0] || originalPost.url;
+            imageUrl = allImages[0] || getFallbackImageUrl(originalPost);
           }
         }
         if (
@@ -711,7 +915,7 @@ function processRawPosts(allPosts: any[]) {
         }
       }
 
-      if (allImages.length === 0) {
+      if (allImages.length === 0 && imageUrl) {
         allImages = [imageUrl];
       }
 
@@ -762,8 +966,13 @@ function processRawPosts(allPosts: any[]) {
         description: post.selftext || post.title,
         imageUrl,
         allImages,
-        isGallery: allImages.length > 1,
+        isGallery: !!post.is_gallery || allImages.length > 1,
         imageCount: allImages.length,
+        galleryPreviewOnly:
+          !!post.is_gallery &&
+          allImages.length <= 1 &&
+          !post.media_metadata &&
+          !post.gallery_data,
         postUrl: `https://reddit.com${post.permalink}`,
         created_utc: post.created_utc,
         created_date: new Date(post.created_utc * 1000).toISOString(),
@@ -777,18 +986,6 @@ function processRawPosts(allPosts: any[]) {
         isPaid,
         aiPolicy,
         imageDimensions: getKnownDimensions(post),
-        _debug: {
-          is_gallery: !!post.is_gallery,
-          is_self: !!post.is_self,
-          media_metadata_count: post.media_metadata
-            ? Object.keys(post.media_metadata).length
-            : 0,
-          has_gallery_data: !!post.gallery_data,
-          has_crosspost: !!(
-            post.crosspost_parent_list &&
-            post.crosspost_parent_list.length > 0
-          ),
-        },
       };
     });
 }
@@ -798,11 +995,15 @@ export async function GET(_req: NextRequest) {
   try {
     const url = new URL(_req.url);
     const subredditParam = url.searchParams.get("subreddits");
+    const source = url.searchParams.get("source");
     const subreddits = subredditParam
       ? subredditParam.split(",").map((s) => s.trim())
       : ["PhotoshopRequest"];
 
-    const result = await fetchPostsViaAPI(subreddits);
+    const result =
+      source === "scrapebadger"
+        ? await fetchPostsViaScrapeBadger(subreddits)
+        : await fetchPostsViaAPI(subreddits);
     result.posts.sort((a: any, b: any) => b.created_utc - a.created_utc);
     console.log(`Found ${result.posts.length} image posts`);
 
